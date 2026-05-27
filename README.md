@@ -1,22 +1,22 @@
-# ZO Agentic Framework (ZAF)
+# ZO.AF: from Zero to One Agentic Framework
 
-> **The Control Plane for Zero-Human Operations & Multi-Agent Teams.**
+> **The Control Plane for "Zero to One" (ZO.AF) Autonomous & Multi-Agent Teams.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Local First](https://img.shields.io/badge/Local--First-Yes-brightgreen)](#)
 [![Stack: Node.js / Vanilla JS](https://img.shields.io/badge/Stack-Node.js%20%2F%20Vanilla%20JS-blue)](#)
 
-ZO Agentic Framework (ZAF) is a self-hosted, local-first agentic operating system designed to coordinate, run, and visualize teams of autonomous AI agents. Rather than treating agents as simple chatbot conversation partners, ZAF establishes a structured control plane—treating agents as scheduled employees with defined roles, clear goal alignment, and deep directory-aware dependency tracking.
+Zero to One Agentic Framework (ZO.AF) is a self-hosted, local-first agentic operating system designed to coordinate, run, and visualize teams of autonomous AI agents. Rather than treating agents as simple chatbot conversation partners, ZO.AF establishes a structured control plane—treating agents as scheduled employees with defined roles, clear goal alignment, and deep directory-aware dependency tracking.
 
-This repository contains the core visualiser, parser, and native live-telemetry server for ZAF.
+This repository contains the core visualiser, parser, and native live-telemetry server for ZO.AF.
 
 ---
 
-## ◈ Core Philosophy: Zero-Human Operations (ZO)
+## ◈ Core Philosophy: From Zero to One (ZO.AF)
 
 Current AI agent frameworks often struggle to scale beyond single-turn inputs or isolated scripts, resulting in runaway costs or "agent drift" (doing busywork instead of the target goal). 
 
-ZAF operates on a different set of assumptions:
+ZO.AF operates on a different set of assumptions:
 1. **Agents as Employees**: Agents have specific roles (e.g., SRE, Sourcing, Intelligence, Design), defined skillsets, and scheduled heartbeats.
 2. **Directory-First State**: Your filesystem is the database. State, ticket definitions, and logs are kept in markdown-based task directories, preventing vendor lock-in.
 3. **Goal-Aware Dependency Graph**: Tasks have clear goal ancestries. Blockers and edges are mapped so agents understand the *why* and *what* of their work and never run out of sync.
@@ -26,7 +26,7 @@ ZAF operates on a different set of assumptions:
 ## ⊞ Core Features (Current Release)
 
 ### 1. Standalone Multi-Repo Auto-Discovery
-ZAF does not rely on a heavy database to monitor your organization. Instead, the native parser (`parse.js`) dynamically scans your development space (`01_Repos/`) to auto-discover active projects, scheduled tasks, and agent programs on the fly. 
+ZO.AF does not rely on a heavy database to monitor your organization. Instead, the native parser (`parse.js`) dynamically scans your development space (`01_Repos/`) to auto-discover active projects, scheduled tasks, and agent programs on the fly. 
 
 ### 2. SSE Live Telemetry Control Server
 A lightweight, zero-dependency Node.js control server (`server.js`) handles HTTP requests and establishes a persistent **Server-Sent Events (SSE)** telemetry stream. The server:
