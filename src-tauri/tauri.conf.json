@@ -2,12 +2,12 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "ZAFControl",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.zaf.control",
   "build": {
-    "frontendDist": "../dashboard",
+    "frontendDist": "../dashboard/dist",
     "devUrl": "http://localhost:4242",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
   },
   "app": {
     "windows": [

@@ -8,7 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const chokidar = require('chokidar');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -94,10 +94,50 @@ function runParse() {
   }
 }
 
+function spawnAgent(ticketId, role, harness) {
+  console.log(`[ZAF Control] Spawning agent for ticket ${ticketId}, role ${role}, harness ${harness}`);
+  const zoScript = path.join(__dirname, '..', 'cli', 'zo.js');
+  
+  const child = spawn('node', [zoScript, 'run', role, '--ticket', ticketId, '--harness', harness], {
+    cwd: path.resolve(__dirname, '..'),
+    env: {
+      ...process.env,
+      PAGER: 'cat'
+    }
+  });
+
+  const broadcastLog = (chunk) => {
+    const lines = chunk.toString().split(/\r?\n/);
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      const dataStr = JSON.stringify({ event: 'log', log: line });
+      for (const res of sseClients) {
+        try {
+          res.write(`data: ${dataStr}\n\n`);
+        } catch (e) {
+          // Ignore
+        }
+      }
+    }
+  };
+
+  child.stdout.on('data', broadcastLog);
+  child.stderr.on('data', (chunk) => {
+    broadcastLog('[stderr] ' + chunk);
+  });
+
+  child.on('close', (code) => {
+    const exitMsg = `[ZAF Control] Subprocess harness terminated with exit code: ${code}`;
+    console.log(exitMsg);
+    broadcastLog(exitMsg);
+    pushReload();
+  });
+}
+
 // ─── HTTP server ──────────────────────────────────────────────────────────────
 
 const server = http.createServer((req, res) => {
-  const parsed = url.parse(req.url);
+  const parsed = url.parse(req.url, true);
   const pathname = parsed.pathname;
 
   // CORS headers
@@ -139,6 +179,34 @@ const server = http.createServer((req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'data.json not found — parse failed' }));
     }
+    return;
+  }
+
+  // ── Run endpoint ──────────────────────────────────────────────────────────
+  if (pathname === '/api/run') {
+    const ticketId = parsed.query.ticket || '';
+    const role = parsed.query.role || 'engineering';
+    const harness = parsed.query.harness || 'mock';
+
+    if (!ticketId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing ticket ID parameter' }));
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'spawning', ticket: ticketId, role, harness }));
+
+    // Spawn subprocess and stream output via SSE
+    spawnAgent(ticketId, role, harness);
+    return;
+  }
+
+  // ── Sync endpoint ─────────────────────────────────────────────────────────
+  if (pathname === '/api/trigger-sync') {
+    pushReload();
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', msg: 'Sync broadcasted' }));
     return;
   }
 

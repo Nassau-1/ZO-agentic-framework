@@ -2,6 +2,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
+use tauri::Emitter;
 
 fn trigger_notification(app: &tauri::AppHandle, title: &str, body: &str) {
   let _ = app.notification()
@@ -11,10 +12,75 @@ fn trigger_notification(app: &tauri::AppHandle, title: &str, body: &str) {
     .show();
 }
 
+#[tauri::command]
+fn spawn_agent_run(app: tauri::AppHandle, ticket_id: String, role: String, harness: String) -> Result<(), String> {
+  use std::io::{BufRead, BufReader};
+  use std::process::{Command, Stdio};
+
+  println!("[ZAF Control] spawn_agent_run invoked: {} {} {}", ticket_id, role, harness);
+
+  std::thread::spawn(move || {
+    let mut child = match Command::new("node")
+      .arg("cli/zo.js")
+      .arg("run")
+      .arg(&role)
+      .arg("--ticket")
+      .arg(&ticket_id)
+      .arg("--harness")
+      .arg(&harness)
+      .stdout(Stdio::piped())
+      .stderr(Stdio::piped())
+      .spawn()
+    {
+      Ok(c) => c,
+      Err(err) => {
+        let err_msg = format!("Failed to spawn zo cli subprocess: {}", err);
+        println!("{}", err_msg);
+        let _ = app.emit("agent-log", err_msg);
+        return;
+      }
+    };
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+      let reader = BufReader::new(stdout);
+      for line in reader.lines() {
+        if let Ok(l) = line {
+          let _ = app_clone.emit("agent-log", l);
+        }
+      }
+    });
+
+    let app_clone2 = app.clone();
+    std::thread::spawn(move || {
+      let reader = BufReader::new(stderr);
+      for line in reader.lines() {
+        if let Ok(l) = line {
+          let _ = app_clone2.emit("agent-log", format!("[stderr] {}", l));
+        }
+      }
+    });
+
+    let status = child.wait();
+    let status_str = match status {
+      Ok(s) => format!("Subprocess exited with status: {}", s),
+      Err(e) => format!("Subprocess failed to wait: {}", e),
+    };
+    println!("[ZAF Control] {}", status_str);
+    let _ = app.emit("agent-log", status_str);
+  });
+
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_notification::init())
+    .invoke_handler(tauri::generate_handler![spawn_agent_run])
     .setup(|app| {
       // 1. Create Menu Items in Tauri v2
       let handle = app.handle();
