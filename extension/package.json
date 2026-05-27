@@ -1,0 +1,63 @@
+{
+  "name": "zaf-control",
+  "displayName": "ZO Agentic Framework Control",
+  "description": "IDE Control Panel & Telemetry for the ZAF multi-agent harness overlay.",
+  "version": "1.0.0",
+  "publisher": "nassau-1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:zaf-sidebar-panel"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "zaf-control-explorer",
+          "title": "ZAF Control",
+          "icon": "resources/zaf-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "zaf-control-explorer": [
+        {
+          "type": "webview",
+          "id": "zaf-sidebar-panel",
+          "name": "ZO Active Board"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ZO Agentic Framework",
+      "properties": {
+        "zaf.reposRoot": {
+          "type": "string",
+          "default": "~/Workspace/01_Repos",
+          "description": "Absolute path to local repositories root folder."
+        },
+        "zaf.defaultHarness": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "gemini",
+            "mock"
+          ],
+          "default": "claude",
+          "description": "Default sovereign CLI harness to use during execution."
+        },
+        "zaf.budgetHardStopCents": {
+          "type": "integer",
+          "default": 5000,
+          "description": "Hard stop cost ceiling in cents for safety loops."
+        }
+      }
+    }
+  }
+}
