@@ -1,0 +1,28 @@
+# Secrets
+.env
+.env.*
+*.env
+*.secret
+*.key
+*.pem
+
+# Logs
+*.log
+logs/
+
+# Node
+node_modules/
+package-lock.json
+
+# Dashboard generated
+dashboard/data.json
+
+# OS
+.DS_Store
+Thumbs.db
+.vs/
+.idea/
+
+# Internal WIP tracking (ignored for public release)
+WIP/
+wip/

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZO WIP Dashboard v2 — Multi-Repo</title>
+  <meta name="description" content="Internal read-only dashboard for ZO programmes — tickets, phases, workstreams, dependency graph. Multi-repo, auto-refresh." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ─── Sidebar ─────────────────────────────────────────────── -->
+  <nav id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">ZO</div>
+      <div>
+        <div class="logo-text">WIP Dashboard</div>
+        <div class="logo-sub">v2 · Multi-Repo</div>
+      </div>
+    </div>
+
+    <!-- Repo Selector -->
+    <div class="sidebar-repo-selector" id="sidebar-repo-selector">
+      <div class="sidebar-section-label" style="padding: 0 8px 6px">Repo</div>
+      <select id="repo-select" class="repo-select">
+        <option value="">All Repos</option>
+      </select>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Programme</div>
+      <a class="nav-item active" id="nav-overview" data-view="overview" href="#overview">
+        <span class="nav-icon">◈</span>
+        <span>Overview</span>
+      </a>
+      <a class="nav-item" id="nav-programme" data-view="programme" href="#programme">
+        <span class="nav-icon">⊞</span>
+        <span>Programme</span>
+      </a>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Tickets</div>
+      <a class="nav-item" id="nav-board" data-view="board" href="#board">
+        <span class="nav-icon">▦</span>
+        <span>Board</span>
+        <span class="nav-badge" id="badge-active">—</span>
+      </a>
+      <a class="nav-item" id="nav-graph" data-view="graph" href="#graph">
+        <span class="nav-icon">⬡</span>
+        <span>Dependency Graph</span>
+      </a>
+      <a class="nav-item" id="nav-archive" data-view="archive" href="#archive">
+        <span class="nav-icon">⏳</span>
+        <span>Archive</span>
+        <span class="nav-badge" id="badge-archived">—</span>
+      </a>
+    </div>
+
+    <div class="sidebar-stats" id="sidebar-stats">
+      <div class="sidebar-section-label" style="padding: 0 8px 6px">Quick Stats</div>
+      <div class="sidebar-stat-item">
+        <span>Blocked</span>
+        <span class="sidebar-stat-value" id="stat-blocked" style="color: var(--status-blocked)">—</span>
+      </div>
+      <div class="sidebar-stat-item">
+        <span>In Progress</span>
+        <span class="sidebar-stat-value" id="stat-inprogress" style="color: var(--status-in-progress)">—</span>
+      </div>
+      <div class="sidebar-stat-item">
+        <span>Waiting Input</span>
+        <span class="sidebar-stat-value" id="stat-waiting" style="color: var(--status-waiting)">—</span>
+      </div>
+      <div class="sidebar-stat-item">
+        <span>Open</span>
+        <span class="sidebar-stat-value" id="stat-open" style="color: var(--status-open)">—</span>
+      </div>
+    </div>
+
+    <div class="sidebar-timestamp" id="sidebar-timestamp">Loading…</div>
+  </nav>
+
+  <!-- ─── Main ──────────────────────────────────────────────── -->
+  <div id="main">
+    <div id="topbar">
+      <div class="topbar-breadcrumb" id="topbar-breadcrumb">
+        <span>ZO</span> › <span id="topbar-view-label">Overview</span>
+      </div>
+      <div class="topbar-actions">
+        <!-- SSE live indicator -->
+        <div class="sse-indicator" id="sse-indicator" title="Live auto-refresh status">
+          <div class="sse-dot" id="sse-dot"></div>
+          <span id="sse-label">Connecting…</span>
+        </div>
+        <button class="btn btn-secondary" id="btn-refresh" title="Manually refresh data">
+          ↺ Refresh
+        </button>
+      </div>
+    </div>
+
+    <!-- Main content + detail panel container -->
+    <div style="display:flex; flex:1; overflow:hidden; min-height:0;">
+      <div id="content">
+        <div class="loading-screen" id="loading-screen">
+          <div class="spinner"></div>
+          <div>Loading data…</div>
+        </div>
+      </div>
+
+      <!-- Ticket detail panel -->
+      <div id="detail-panel" class="hidden">
+        <div class="detail-header">
+          <div class="detail-header-top">
+            <span class="detail-id" id="detail-id"></span>
+            <div class="detail-close" id="detail-close" title="Close">✕</div>
+          </div>
+          <div class="detail-title" id="detail-title"></div>
+          <div class="detail-meta-row" id="detail-meta-row"></div>
+        </div>
+        <div class="detail-body">
+          <div class="detail-meta-grid" id="detail-meta-grid"></div>
+          <div class="detail-deps" id="detail-deps" style="display:none"></div>
+          <div class="detail-markdown" id="detail-markdown"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
