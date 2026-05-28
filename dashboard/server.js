@@ -408,9 +408,16 @@ ${payload.description || 'Task context and description.'}
   }
 
   // ── Static files ──────────────────────────────────────────────────────────
-  let filePath = path.join(STATIC_DIR, pathname === '/' ? 'index.html' : pathname);
+  let decodedPathname;
+  try {
+    decodedPathname = decodeURIComponent(pathname);
+  } catch (err) {
+    res.writeHead(400); res.end('Bad Request'); return;
+  }
+  let filePath = path.resolve(path.join(STATIC_DIR, decodedPathname === '/' ? 'index.html' : decodedPathname));
   // Safety check: don't serve files outside static dir
-  if (!filePath.startsWith(STATIC_DIR)) {
+  const absoluteStaticDir = path.resolve(STATIC_DIR);
+  if (!filePath.startsWith(absoluteStaticDir + path.sep) && filePath !== absoluteStaticDir) {
     res.writeHead(403); res.end('Forbidden'); return;
   }
 

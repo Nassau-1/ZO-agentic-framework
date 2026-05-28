@@ -1,0 +1,4 @@
+## 2026-05-28 - [Path Traversal bypass with url encoding]
+**Vulnerability:** A path traversal vulnerability where user input with url-encoded elements bypasses startWith path checks if decoded afterwards, or shares a prefix with the targeted directory (e.g., /app/dashboard-secrets/ is perceived as inside /app/dashboard/ because startsWith matches the string prefix).
+**Learning:** URL components must be carefully decoded and resolved into absolute paths using path.resolve before comparing against allowed directory bounds. Furthermore, path.sep should be appended to the allowed directory path to avoid false positive prefix matches where the directory name is a substring of an adjacent directory's name.
+**Prevention:** Always use decodeURIComponent, path.resolve on paths and ensure prefix matching utilizes path.sep (or strictly equals the root directory).
