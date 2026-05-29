@@ -4863,6 +4863,11 @@ function renderOrg(container) {
           <button class="zaf-btn secondary" id="org-add-agent">+ Agent</button>
           <button class="zaf-btn secondary" id="org-fit">Fit</button>
           <button class="zaf-btn secondary" id="org-save">Save Layout</button>
+          <span style="flex:1"></span>
+          <button class="zaf-btn secondary" id="org-zoom-out" title="Zoom out">−</button>
+          <span id="org-zoom-val" style="font-size:11px;color:var(--text-muted);min-width:46px;text-align:center;font-variant-numeric:tabular-nums">100%</span>
+          <button class="zaf-btn secondary" id="org-zoom-in" title="Zoom in">+</button>
+          <button class="zaf-btn secondary" id="org-zoom-reset" title="Reset to 100%">⟲</button>
         </div>
         <svg class="zaf-org-canvas" id="org-canvas" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid meet"></svg>
         <div class="zaf-org-help">
@@ -4886,6 +4891,15 @@ function drawOrgCanvas() {
   const agents = STATE.config.agents || {};
   const teams = org.teams;
   const layout = org.layout;
+
+  // Zoom (TKT-ZAF-0051): scale the viewBox. Stored on org.zoom; 100% = 1.0.
+  const zoom = typeof org.zoom === 'number' && org.zoom > 0 ? org.zoom : 1;
+  const baseW = 1600, baseH = 1000;
+  const vbW = baseW / zoom, vbH = baseH / zoom;
+  const vbX = (baseW - vbW) / 2, vbY = (baseH - vbH) / 2;
+  svg.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`);
+  const zoomVal = document.getElementById('org-zoom-val');
+  if (zoomVal) zoomVal.textContent = `${Math.round(zoom * 100)}%`;
 
   // Initial layout: tile teams that lack coords
   const TEAM_W = 280, TEAM_H = 240, MARGIN_X = 320, MARGIN_Y = 280;
@@ -5070,6 +5084,23 @@ function bindOrgInteractions(container) {
     await persistConfig();
     alert('Org layout saved');
   });
+
+  // Zoom controls (TKT-ZAF-0051). Steps: 25% .. 300% clamped. Persisted on org.zoom.
+  const ZOOM_MIN = 0.25, ZOOM_MAX = 3, ZOOM_STEP = 0.1;
+  const applyZoom = async (z) => {
+    STATE.config.org.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, +z.toFixed(2)));
+    drawOrgCanvas();
+    await persistConfig();
+  };
+  document.getElementById('org-zoom-in')?.addEventListener('click', () => applyZoom((STATE.config.org.zoom || 1) + ZOOM_STEP));
+  document.getElementById('org-zoom-out')?.addEventListener('click', () => applyZoom((STATE.config.org.zoom || 1) - ZOOM_STEP));
+  document.getElementById('org-zoom-reset')?.addEventListener('click', () => applyZoom(1));
+  document.getElementById('org-canvas')?.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+    applyZoom((STATE.config.org.zoom || 1) + delta);
+  }, { passive: false });
 
   renderOrgInspector();
 }
