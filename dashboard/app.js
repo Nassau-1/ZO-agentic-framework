@@ -3862,11 +3862,21 @@ function wireMarketplace(container) {
         </div>`;
       }
       html += `</div>`;
-      html += `<div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+      html += `<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="zaf-btn" id="mkt-import-btn">Import selected</button>
+        <button type="button" class="zaf-btn secondary" id="mkt-select-all">Select all</button>
+        <button type="button" class="zaf-btn secondary" id="mkt-deselect-all">Deselect all</button>
         <span id="mkt-import-status" style="font-size:12px;color:var(--text-muted)"></span>
       </div>`;
       previewArea.innerHTML = html;
+
+      // Bulk select / deselect (TKT-ZAF-0050)
+      previewArea.querySelector('#mkt-select-all')?.addEventListener('click', () => {
+        previewArea.querySelectorAll('.mkt-sel-cb').forEach(cb => { cb.checked = true; });
+      });
+      previewArea.querySelector('#mkt-deselect-all')?.addEventListener('click', () => {
+        previewArea.querySelectorAll('.mkt-sel-cb').forEach(cb => { cb.checked = false; });
+      });
 
       const importBtn = previewArea.querySelector('#mkt-import-btn');
       importBtn.addEventListener('click', async () => {
@@ -3986,6 +3996,17 @@ function wireMarketplace(container) {
     });
   });
 
+  // Right-pane agent detail flyout (TKT-ZAF-0050)
+  container.querySelectorAll('.mkt-agent-card[data-key]').forEach(card => {
+    const key = card.dataset.key;
+    if (!key) return;
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('button') || e.target.closest('input') || e.target.closest('label')) return;
+      openAgentDetailFlyout(key, container);
+    });
+  });
+
   // Duplicate buttons
   container.querySelectorAll('.mkt-dupe-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -4007,6 +4028,148 @@ function wireMarketplace(container) {
         btn.textContent = 'Duplicate to local';
       }
     });
+  });
+}
+
+// Agent detail flyout (TKT-ZAF-0050) — opens from the right and renders the full agent spec
+// with inline edit + save, plus Org/team assignment and N+1 (manager) selection.
+function openAgentDetailFlyout(key, hostContainer) {
+  document.getElementById('zaf-agent-flyout')?.remove();
+  const conf = STATE.config || {};
+  const a = (conf.agents || {})[key];
+  if (!a) return;
+  const teams = (conf.org?.teams || []);
+  const otherAgentKeys = Object.keys(conf.agents || {}).filter(k => k !== key);
+  const harnessOpts = getAllHarnessOptions();
+  const cap = REASONING_CAPABILITY[a.harness] || { values: ['low','medium','high'] };
+  const reasoningVals = Array.isArray(cap.values) ? cap.values : ['low','medium','high'];
+  const currentTeamId = (teams.find(t => (t.members || []).includes(key)) || {}).id || '';
+
+  const html = `
+    <div class="zaf-launch-backdrop" id="zaf-agent-flyout-bd"></div>
+    <aside class="zaf-agent-flyout-panel" role="dialog" aria-label="Agent ${safeHTML(a.roleName || key)}">
+      <header style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border-subtle);">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:var(--text-primary)">${safeHTML(a.roleName || key)}</div>
+          <div style="font-size:11px;color:var(--text-muted);font-family:'JetBrains Mono',monospace">${safeHTML(key)}</div>
+        </div>
+        <button class="zaf-launch-close" id="zaf-agent-flyout-close" title="Close">✕</button>
+      </header>
+      <form id="zaf-agent-flyout-form" style="display:flex;flex-direction:column;gap:12px;padding:16px 18px;overflow-y:auto;">
+        <div class="zaf-field"><label>Role Name</label>
+          <input id="fly-roleName" value="${safeHTML(a.roleName || '')}" />
+        </div>
+        <div class="zaf-field"><label>System Prompt / Personality</label>
+          <textarea id="fly-personality" rows="6" style="resize:vertical">${safeHTML(a.personality || '')}</textarea>
+        </div>
+        <div class="zaf-field"><label>CLI / Harness</label>
+          <select id="fly-harness">
+            ${harnessOpts.map(h => `<option value="${h.id}" ${a.harness===h.id?'selected':''}>${h.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="zaf-field"><label>Model ID</label>
+          <input id="fly-modelId" value="${safeHTML(a.modelId || '')}" />
+        </div>
+        <div class="zaf-field"><label>Reasoning</label>
+          <select id="fly-reasoning">
+            ${reasoningVals.map(v => `<option value="${v}" ${a.reasoning===v?'selected':''}>${v}</option>`).join('')}
+          </select>
+        </div>
+        <div class="zaf-field"><label>Structural Role</label>
+          <select id="fly-structRole">
+            ${Object.entries(STRUCTURAL_PERSONAS).map(([id,p]) => `<option value="${id}" ${(a.structuralRole||'worker')===id?'selected':''}>${p.icon} ${p.label}</option>`).join('')}
+          </select>
+        </div>
+        <div class="zaf-field"><label>Heartbeat (seconds)</label>
+          <input id="fly-heartbeat" type="number" min="5" max="300" step="5" value="${a.heartbeat || 40}" />
+        </div>
+        <div class="zaf-field"><label>Org Team</label>
+          <select id="fly-team">
+            <option value="">— unassigned —</option>
+            ${teams.map(t => `<option value="${safeHTML(t.id)}" ${currentTeamId===t.id?'selected':''}>${safeHTML(t.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="zaf-field"><label>N+1 Supervisor</label>
+          <select id="fly-manager">
+            <option value="">None (reports to operator)</option>
+            ${otherAgentKeys.map(k => `<option value="${safeHTML(k)}" ${(a.manager||'')===k?'selected':''}>${safeHTML(conf.agents[k].roleName || k)} (${safeHTML(k)})</option>`).join('')}
+          </select>
+        </div>
+        <div class="zaf-field"><label>Authorized CLIs</label>
+          <div id="fly-harness-multi" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--bg-input);border:1px solid var(--border-medium);padding:10px 12px;border-radius:var(--radius-sm);">
+            ${harnessOpts.map(h => {
+              const isActive = Array.isArray(a.harnesses) && a.harnesses.length
+                ? a.harnesses.includes(h.id)
+                : (a.harness === h.id);
+              return `<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary);cursor:pointer;">
+                <input type="checkbox" class="fly-harness-cb" value="${h.id}" ${isActive?'checked':''} />
+                <span>${h.label}</span>
+              </label>`;
+            }).join('')}
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;padding:6px 0">
+          <button type="submit" class="zaf-btn">Save</button>
+          <span id="fly-status" style="font-size:11px;color:var(--text-muted)"></span>
+        </div>
+      </form>
+    </aside>`;
+
+  const wrap = document.createElement('div');
+  wrap.id = 'zaf-agent-flyout';
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap);
+
+  const close = () => wrap.remove();
+  wrap.querySelector('#zaf-agent-flyout-close').addEventListener('click', close);
+  wrap.querySelector('#zaf-agent-flyout-bd').addEventListener('click', close);
+
+  wrap.querySelector('#zaf-agent-flyout-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const statusEl = wrap.querySelector('#fly-status');
+    const harnesses = Array.from(wrap.querySelectorAll('.fly-harness-cb:checked')).map(cb => cb.value);
+    const patch = {
+      roleName:       wrap.querySelector('#fly-roleName').value.trim(),
+      personality:    wrap.querySelector('#fly-personality').value,
+      harness:        wrap.querySelector('#fly-harness').value,
+      modelId:        wrap.querySelector('#fly-modelId').value.trim(),
+      reasoning:      wrap.querySelector('#fly-reasoning').value,
+      structuralRole: wrap.querySelector('#fly-structRole').value,
+      heartbeat:      +wrap.querySelector('#fly-heartbeat').value || 40,
+      manager:        wrap.querySelector('#fly-manager').value || null,
+      harnesses:      harnesses.length ? harnesses : undefined,
+    };
+    const targetTeamId = wrap.querySelector('#fly-team').value;
+    statusEl.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/agent/update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, patch }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+      // Team membership change: write via /api/config/save (read current, mutate, send).
+      if (STATE.config?.org?.teams) {
+        const currentTeam = STATE.config.org.teams.find(t => (t.members||[]).includes(key));
+        const moving = (currentTeam?.id || '') !== targetTeamId;
+        if (moving) {
+          for (const t of STATE.config.org.teams) t.members = (t.members||[]).filter(m => m !== key);
+          if (targetTeamId) {
+            const target = STATE.config.org.teams.find(t => t.id === targetTeamId);
+            if (target) { target.members = target.members || []; target.members.push(key); }
+          }
+          await fetch('/api/config/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(STATE.config),
+          });
+        }
+      }
+      STATE.config.agents[key] = d.agent || { ...STATE.config.agents[key], ...patch };
+      statusEl.textContent = '✓ Saved';
+      setTimeout(() => { close(); renderControl(hostContainer); }, 600);
+    } catch (err) {
+      statusEl.textContent = '✗ ' + err.message;
+    }
   });
 }
 

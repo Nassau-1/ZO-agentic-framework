@@ -1132,6 +1132,22 @@
   .zaf-cli-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .zaf-cli-card .cli-pty-host-wrap { width: 100%; }
+/* ── Marketplace agent detail flyout (TKT-ZAF-0050) ──────────────────────── */
+.zaf-agent-flyout-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 90vw);
+  background: var(--surface-1, #0c0c12); border-left: 1px solid var(--border-medium, #2a2a3a);
+  z-index: 9999; display: flex; flex-direction: column;
+  box-shadow: -8px 0 24px rgba(0,0,0,0.5);
+  animation: zaf-flyout-in 0.18s ease-out;
+}
+@keyframes zaf-flyout-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+#zaf-agent-flyout-bd {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 9998;
+}
+
 .zaf-cli-card .cli-pty-host-wrap > div {
   min-height: 360px;
   height: clamp(360px, 45vh, 560px) !important;

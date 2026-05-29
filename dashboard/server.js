@@ -1698,6 +1698,26 @@ ${payload.description || 'Task context and description.'}
     return;
   }
 
+  // ── Agent update (TKT-ZAF-0050) ────────────────────────────────────────────
+  if (pathname === '/api/agent/update' && req.method === 'POST') {
+    try {
+      const { key, patch } = await readJsonBody(req);
+      if (!key || !patch || typeof patch !== 'object') return send(res, 400, { error: 'key and patch required' });
+      const conf = readConfig() || {};
+      conf.agents = conf.agents || {};
+      if (!conf.agents[key]) return send(res, 404, { error: 'agent not found: ' + key });
+      // Whitelist editable fields.
+      const allowed = ['roleName','personality','modelId','reasoning','heartbeat','harness',
+                       'harnesses','structuralRole','manager','team','tools'];
+      const before = JSON.stringify(conf.agents[key]);
+      for (const f of allowed) if (f in patch) conf.agents[key][f] = patch[f];
+      writeConfig(conf);
+      auditAppend({ kind: 'agent.update', key, fields: Object.keys(patch).filter(f => allowed.includes(f)) });
+      send(res, 200, { status: 'ok', agent: conf.agents[key], changed: before !== JSON.stringify(conf.agents[key]) });
+    } catch (e) { send(res, 400, { error: e.message }); }
+    return;
+  }
+
   // ── Agent duplicate ────────────────────────────────────────────────────────
   if (pathname === '/api/agents/duplicate' && req.method === 'POST') {
     try {
