@@ -1481,6 +1481,51 @@ ${payload.description || 'Task context and description.'}
   }
 
   // ── Repo create (TKT-ZAF-0028) ────────────────────────────────────────────
+  // ── Repo import (TKT-ZAF-0055) — register existing local or clone remote ───
+  if (pathname === '/api/repo/import' && req.method === 'POST') {
+    try {
+      const payload = await readJsonBody(req);
+      const { name, displayName, mode, localPath, remoteUrl, cloneTo } = payload;
+      if (!name) return send(res, 400, { error: 'name required' });
+      let finalPath = '';
+      if (mode === 'local') {
+        if (!localPath) return send(res, 400, { error: 'localPath required for local import' });
+        if (!fs.existsSync(localPath)) return send(res, 400, { error: 'Path does not exist: ' + localPath });
+        if (!fs.existsSync(path.join(localPath, '.git'))) return send(res, 400, { error: 'Not a git repo (missing .git): ' + localPath });
+        finalPath = localPath;
+      } else if (mode === 'clone') {
+        if (!remoteUrl || !cloneTo) return send(res, 400, { error: 'remoteUrl and cloneTo required for clone import' });
+        if (fs.existsSync(cloneTo) && fs.readdirSync(cloneTo).length > 0) {
+          return send(res, 400, { error: 'cloneTo already exists and is non-empty: ' + cloneTo });
+        }
+        try {
+          execSync(`git clone "${remoteUrl}" "${cloneTo}"`, { timeout: 120000, stdio: 'pipe' });
+        } catch (e) {
+          return send(res, 500, { error: 'git clone failed: ' + (e.stderr?.toString() || e.message) });
+        }
+        finalPath = cloneTo;
+      } else {
+        return send(res, 400, { error: 'mode must be "local" or "clone"' });
+      }
+      // Surface CLAUDE.md / AGENTS.md presence (informational only — never edit them).
+      const claudeMd = fs.existsSync(path.join(finalPath, 'CLAUDE.md'));
+      const agentsMd = fs.existsSync(path.join(finalPath, 'AGENTS.md'));
+      const conf = readConfig() || {};
+      conf.repos = conf.repos || [];
+      if (conf.repos.find(r => r.id === name)) return send(res, 400, { error: 'repo id already registered: ' + name });
+      conf.repos.push({
+        id: name, name: displayName || name, path: finalPath,
+        imported: true, importedAt: new Date().toISOString(),
+        hasClaudeMd: claudeMd, hasAgentsMd: agentsMd,
+      });
+      writeConfig(conf);
+      auditAppend({ kind: 'repo.import', name, mode, path: finalPath, claudeMd, agentsMd });
+      pushReload();
+      send(res, 200, { status: 'ok', name, path: finalPath, claudeMd, agentsMd });
+    } catch (e) { send(res, 400, { error: e.message }); }
+    return;
+  }
+
   if (pathname === '/api/repo/create' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req);

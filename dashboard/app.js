@@ -1670,7 +1670,121 @@ function openNewRepoWizard() {
   modal.querySelector('.zaf-launch-backdrop').addEventListener('click', close);
 
   // Step state
-  const form = { name:'', displayName:'', localPath:'', description:'', remoteUrl:'', mode:'manual', templateName:'zaf-standard', agentRole: agentKeys[0] || 'engineering', agentHarness:'claude-code', scaffoldInstructions:'' };
+  const form = { name:'', displayName:'', localPath:'', description:'', remoteUrl:'', mode:'manual', templateName:'zaf-standard', agentRole: agentKeys[0] || 'engineering', agentHarness:'claude-code', scaffoldInstructions:'', flow:'create', importMode:'local', cloneTo:'' };
+
+  // Step 0 (TKT-ZAF-0055): pick Create-new vs Import-existing flow.
+  function renderStep0() {
+    body.innerHTML = `
+      <div class="wizard-steps">
+        <div class="wizard-step active">0 · Flow</div>
+        <div class="wizard-step">1 · Repo Info</div>
+        <div class="wizard-step">2 · ${form.flow === 'import' ? 'Confirm' : 'Scaffold'}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
+        <label class="zaf-flow-card" style="border:1px solid ${form.flow==='create'?'var(--indigo-500,#6366f1)':'var(--border-medium)'};border-radius:6px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;">
+          <input type="radio" name="nr-flow" value="create" ${form.flow==='create'?'checked':''} style="margin-bottom:6px"/>
+          <strong style="color:var(--text-primary)">Create new repo</strong>
+          <span style="font-size:11px;color:var(--text-muted)">Scaffold a fresh repository with ZAF templates and (optionally) dispatch an agent to flesh it out.</span>
+        </label>
+        <label class="zaf-flow-card" style="border:1px solid ${form.flow==='import'?'var(--indigo-500,#6366f1)':'var(--border-medium)'};border-radius:6px;padding:14px;cursor:pointer;display:flex;flex-direction:column;gap:6px;">
+          <input type="radio" name="nr-flow" value="import" ${form.flow==='import'?'checked':''} style="margin-bottom:6px"/>
+          <strong style="color:var(--text-primary)">Import existing repo</strong>
+          <span style="font-size:11px;color:var(--text-muted)">Register a repo you already have locally, or clone one from a Git remote. ZAF will NOT modify files in the imported repo.</span>
+        </label>
+      </div>`;
+    footer.innerHTML = `
+      <button class="zaf-btn secondary" id="nr-cancel">Cancel</button>
+      <button class="zaf-btn" id="nr-step0-next">Next →</button>`;
+    footer.querySelector('#nr-cancel').addEventListener('click', close);
+    body.querySelectorAll('input[name="nr-flow"]').forEach(r => r.addEventListener('change', () => {
+      form.flow = body.querySelector('input[name="nr-flow"]:checked').value;
+      renderStep0();
+    }));
+    footer.querySelector('#nr-step0-next').addEventListener('click', () => {
+      if (form.flow === 'import') renderImportStep();
+      else renderStep1();
+    });
+  }
+
+  function renderImportStep() {
+    body.innerHTML = `
+      <div class="wizard-steps">
+        <div class="wizard-step done">0 · Flow ✓</div>
+        <div class="wizard-step active">1 · Import</div>
+        <div class="wizard-step">2 · Confirm</div>
+      </div>
+      <div class="zaf-field"><label>Repo id (slug — must be unique)</label>
+        <input id="nr-imp-name" placeholder="my-existing-repo" value="${safeHTML(form.name)}" />
+      </div>
+      <div class="zaf-field"><label>Display name</label>
+        <input id="nr-imp-display" placeholder="My Existing Repo" value="${safeHTML(form.displayName)}" />
+      </div>
+      <div class="zaf-field"><label>Source</label>
+        <div class="scaffold-mode-toggle">
+          <label><input type="radio" name="nr-imp-mode" value="local" ${form.importMode==='local'?'checked':''}><span>Local folder (already cloned)</span></label>
+          <label><input type="radio" name="nr-imp-mode" value="clone" ${form.importMode==='clone'?'checked':''}><span>Clone from Git remote</span></label>
+        </div>
+      </div>
+      <div class="zaf-field" id="nr-imp-local-row" style="${form.importMode==='clone'?'display:none':''}">
+        <label>Local path to existing repo (must contain .git/)</label>
+        <input id="nr-imp-path" placeholder="C:/Users/LENOVO/Workspace/01_Repos/some-repo" value="${safeHTML(form.localPath)}" />
+      </div>
+      <div class="zaf-field" id="nr-imp-remote-row" style="${form.importMode==='local'?'display:none':''}">
+        <label>Remote URL</label>
+        <input id="nr-imp-remote" placeholder="https://github.com/org/repo.git" value="${safeHTML(form.remoteUrl)}" />
+        <label style="margin-top:8px">Clone into</label>
+        <input id="nr-imp-cloneto" placeholder="C:/Users/LENOVO/Workspace/01_Repos/&lt;repo-id&gt;" value="${safeHTML(form.cloneTo)}" />
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);background:rgba(99,102,241,0.08);border-left:3px solid var(--indigo-500,#6366f1);padding:8px 10px;border-radius:4px;">
+        ZAF will not touch files inside the imported repo. CLAUDE.md / AGENTS.md presence is detected and surfaced; nothing is written.
+      </div>`;
+    footer.innerHTML = `
+      <button class="zaf-btn secondary" id="nr-back">← Back</button>
+      <button class="zaf-btn" id="nr-import">Import</button>`;
+    footer.querySelector('#nr-back').addEventListener('click', renderStep0);
+    body.querySelectorAll('input[name="nr-imp-mode"]').forEach(r => r.addEventListener('change', () => {
+      form.importMode = body.querySelector('input[name="nr-imp-mode"]:checked').value;
+      renderImportStep();
+    }));
+    const nameI = body.querySelector('#nr-imp-name');
+    const cloneI = body.querySelector('#nr-imp-cloneto');
+    nameI.addEventListener('input', () => {
+      form.name = nameI.value.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+      if (cloneI && (!form.cloneTo || form.cloneTo.endsWith('/' + form._prevImpName))) {
+        cloneI.value = form.name ? `C:/Users/LENOVO/Workspace/01_Repos/${form.name}` : '';
+        form.cloneTo = cloneI.value;
+      }
+      form._prevImpName = form.name;
+    });
+    footer.querySelector('#nr-import').addEventListener('click', async () => {
+      form.name        = body.querySelector('#nr-imp-name').value.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+      form.displayName = body.querySelector('#nr-imp-display').value.trim();
+      form.localPath   = body.querySelector('#nr-imp-path')?.value.trim() || '';
+      form.remoteUrl   = body.querySelector('#nr-imp-remote')?.value.trim() || '';
+      form.cloneTo     = body.querySelector('#nr-imp-cloneto')?.value.trim() || '';
+      if (!form.name) return alert('Repo id is required');
+      const btn = footer.querySelector('#nr-import');
+      btn.disabled = true; btn.textContent = 'Importing…';
+      try {
+        const r = await fetch('/api/repo/import', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: form.name, displayName: form.displayName || form.name,
+            mode: form.importMode, localPath: form.localPath,
+            remoteUrl: form.remoteUrl, cloneTo: form.cloneTo,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Import failed');
+        close();
+        await loadData();
+        alert(`Imported repo "${form.name}".\nPath: ${data.path}\nCLAUDE.md: ${data.claudeMd ? 'yes' : 'no'} · AGENTS.md: ${data.agentsMd ? 'yes' : 'no'}`);
+      } catch (err) {
+        alert('Import failed: ' + err.message);
+        btn.disabled = false; btn.textContent = 'Import';
+      }
+    });
+  }
 
   function renderStep1() {
     body.innerHTML = `
@@ -1700,9 +1814,9 @@ function openNewRepoWizard() {
         </div>
       </div>`;
     footer.innerHTML = `
-      <button class="zaf-btn secondary" id="nr-cancel">Cancel</button>
+      <button class="zaf-btn secondary" id="nr-back0">← Back</button>
       <button class="zaf-btn" id="nr-step1-next">Next →</button>`;
-    footer.querySelector('#nr-cancel').addEventListener('click', close);
+    footer.querySelector('#nr-back0').addEventListener('click', renderStep0);
 
     // Auto-fill path from name
     const nameInput = body.querySelector('#nr-name');
@@ -1813,7 +1927,7 @@ function openNewRepoWizard() {
     });
   }
 
-  renderStep1();
+  renderStep0();
 }
 
 // =========================================================================
