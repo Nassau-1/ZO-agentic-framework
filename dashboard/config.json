@@ -198,7 +198,6 @@
   "github": {
     "name": "Nassau-1",
     "email": "enzoterrier@gmail.com",
-    "pat": "ghp_FAKEPAT999",
     "defaultRemote": "origin",
     "authMethod": "ssh"
   },
@@ -216,5 +215,12 @@
       "runs": 1,
       "successes": 0
     }
+  },
+  "marketplaceDefaults": {
+    "harness": "claude-code",
+    "modelId": "claude-sonnet-4-6",
+    "reasoning": "medium",
+    "structuralRole": "worker",
+    "heartbeat": 40
   }
 }

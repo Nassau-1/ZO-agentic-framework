@@ -29,7 +29,15 @@ const STATIC_DIR = __dirname;
 const PARSE_SCRIPT = path.join(__dirname, 'parse.js');
 const DATA_FILE = path.join(__dirname, 'data.json');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
+const SECRETS_FILE = path.join(__dirname, '.secrets.json'); // gitignored — PAT lives here (TKT-ZAF-0058)
 const AUDIT_FILE = path.join(__dirname, 'audit-log.jsonl');
+
+function readSecrets() {
+  try { return JSON.parse(fs.readFileSync(SECRETS_FILE, 'utf8')); } catch { return {}; }
+}
+function writeSecrets(s) {
+  fs.writeFileSync(SECRETS_FILE, JSON.stringify(s, null, 2), 'utf8');
+}
 
 const MIME = {
   '.html': 'text/html',
@@ -386,9 +394,19 @@ const RATE_LIMIT_PATTERNS = {
 // ─── Seed prompt composer ────────────────────────────────────────────────────
 
 function composeSeedPrompt(opts, ticketBody) {
-  const { ticketId, role, modelId, model, reasoning, heartbeat, promptAddendum, ticketTitle, repoName, personality } = opts;
+  const { ticketId, role, modelId, model, reasoning, heartbeat, promptAddendum, ticketTitle, repoName, personality, tools, toolsRegistry } = opts;
   const effectiveModel = modelId || model || '(default for this CLI)';
   const personalitySection = personality ? `\n## Personality & Scope\n${personality}\n` : '';
+
+  // Authorized Tools (TKT-ZAF-0060) — enumerate the agent's permitted tool set.
+  let toolsSection = '';
+  if (Array.isArray(tools) && tools.length && Array.isArray(toolsRegistry)) {
+    const lines = tools.map(id => {
+      const t = toolsRegistry.find(r => r.id === id);
+      return t ? `- **${t.name}** (\`${id}\`): ${t.description}` : `- \`${id}\` (no description registered)`;
+    });
+    toolsSection = `\n## Authorized Tools\n\nThe following tools are explicitly authorized for this agent on this ticket:\n\n${lines.join('\n')}\n`;
+  }
 
   // Inject codebase context if CODEBASE.md exists in the repo root
   let codebaseSection = '';
@@ -430,7 +448,7 @@ You are operating under the ZO Agentic Framework (ZAF) control plane. Read this 
 - **Model target**: ${effectiveModel}
 - **Reasoning level**: ${reasoning || 'medium'}
 - **Heartbeat interval**: ${heartbeat || '40'} seconds
-${personalitySection}${codebaseSection}${skillsSection}
+${personalitySection}${toolsSection}${codebaseSection}${skillsSection}
 ## Ticket body
 
 \`\`\`markdown
@@ -466,14 +484,16 @@ function spawnAgent(opts) {
   const repoRoot = path.resolve(REPOS_ROOT, repoSlug);
   const isRealCli = PTY_REAL_HARNESSES.has(harness);
 
-  // Resolve personality from config if not supplied directly
+  // Resolve personality + authorized tools from config if not supplied directly
   let personality = opts.personality || '';
-  if (!personality) {
-    try {
-      const conf = readConfig();
-      personality = conf?.agents?.[role]?.personality || '';
-    } catch {}
-  }
+  let agentTools = [];
+  let toolsRegistry = [];
+  try {
+    const conf = readConfig();
+    if (!personality) personality = conf?.agents?.[role]?.personality || '';
+    agentTools = conf?.agents?.[role]?.tools || [];
+    toolsRegistry = conf?.toolsRegistry || [];
+  } catch {}
 
   // Compose seed for real CLIs
   let seedText = '';
@@ -483,7 +503,7 @@ function spawnAgent(opts) {
     try { ticketBody = fs.readFileSync(ticketPath, 'utf8'); } catch {}
     const titleMatch = ticketBody.match(/^title:\s*(.+)$/m);
     const ticketTitle = titleMatch ? titleMatch[1].trim() : ticketId;
-    seedText = composeSeedPrompt({ ticketId, role, modelId: effectiveModelId, reasoning, heartbeat, promptAddendum, ticketTitle, repoName: repoSlug, personality }, ticketBody);
+    seedText = composeSeedPrompt({ ticketId, role, modelId: effectiveModelId, reasoning, heartbeat, promptAddendum, ticketTitle, repoName: repoSlug, personality, tools: agentTools, toolsRegistry }, ticketBody);
   }
 
   // Determine PTY command
@@ -957,11 +977,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Config GET (PAT scrubbed — never returned after save) ─────────────────
+  // ── Config GET (PAT comes from .secrets.json, never from config.json) ────────
   if (pathname === '/api/config') {
     try {
       const conf = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-      if (conf.github?.pat) conf.github.pat = '•••••';
+      // Scrub any legacy PAT that may have been stored in config.json before TKT-ZAF-0058.
+      if (conf.github?.pat) { delete conf.github.pat; }
+      // Indicate whether a PAT exists in the secrets file without exposing the value.
+      const secrets = readSecrets();
+      if (conf.github) conf.github._hasPatSecret = !!secrets.github?.pat;
       send(res, 200, JSON.stringify(conf, null, 2));
     } catch { send(res, 500, { error: 'config.json read failed' }); }
     return;
@@ -1650,7 +1674,15 @@ ${payload.description || 'Task context and description.'}
       if (defaultRemote) conf.github.defaultRemote = defaultRemote;
       if (authMethod)    conf.github.authMethod    = authMethod;
       if (sshKeyPath)    conf.github.sshKeyPath    = sshKeyPath;
-      if (pat)           conf.github.pat           = pat;
+      // PAT → .secrets.json only (never written to config.json). TKT-ZAF-0058.
+      if (pat) {
+        const sec = readSecrets();
+        sec.github = sec.github || {};
+        sec.github.pat = pat;
+        writeSecrets(sec);
+      }
+      // Ensure legacy PAT is scrubbed from config.json if it was ever stored there.
+      if (conf.github?.pat) delete conf.github.pat;
       writeConfig(conf);
       auditAppend({ kind: 'github.config-saved', name: name || '', email: email || '', authMethod: authMethod || '' });
       send(res, 200, { status: 'ok' });

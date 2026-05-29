@@ -140,10 +140,9 @@ The core idea is simple: the file system is the source of truth. Tickets, progra
 git clone https://github.com/Nassau-1/zaf.git
 cd zaf
 npm install
-cd dashboard
-npm install
-cd ..
 ```
+
+> `npm install` automatically cascades into `dashboard/` via a `postinstall` script — no need to `cd dashboard && npm install` separately.
 
 ### Start the dashboard
 
@@ -182,6 +181,12 @@ node cli/test-harness.js
 ```
 
 See [`docs/QUICKSTART.md`](docs/QUICKSTART.md) for a more detailed walkthrough.
+
+### Run as a desktop app (Windows)
+
+A pre-built Windows executable is available at [`bin/ZAF.exe`](bin/ZAF.exe). It wraps the local
+control server and opens at `http://localhost:4242`. Start the Node server first (`npm start`),
+then launch `bin/ZAF.exe`.
 
 ## Example workflow
 
@@ -233,6 +238,11 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the detailed roadmap.
 | [`docs/EXTENSION-GUIDE.md`](docs/EXTENSION-GUIDE.md) | VSCode extension setup and usage |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Planned improvements |
 | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Release notes |
+| [`docs/PERSISTENCE.md`](docs/PERSISTENCE.md) | Storage location and lifecycle for every ZAF state surface |
+| [`docs/BACKUPS.md`](docs/BACKUPS.md) | Rotational backup engine, rotation policy, and restore |
+| [`docs/TOOL-REGISTRATION.md`](docs/TOOL-REGISTRATION.md) | How to register and authorize tools for agents |
+| [`docs/PROGRAMME-PLANNER.md`](docs/PROGRAMME-PLANNER.md) | Programme planner design: centralised vs federated, MVP scope |
+| [`docs/WIP-MIRROR.md`](docs/WIP-MIRROR.md) | Off-machine mirror for the WIP ticket corpus |
 
 ## Stack
 

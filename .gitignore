@@ -5,6 +5,7 @@
 *.secret
 *.key
 *.pem
+dashboard/.secrets.json
 
 # Logs
 *.log

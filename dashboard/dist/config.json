@@ -216,5 +216,12 @@
       "runs": 1,
       "successes": 0
     }
+  },
+  "marketplaceDefaults": {
+    "harness": "claude-code",
+    "modelId": "claude-sonnet-4-6",
+    "reasoning": "medium",
+    "structuralRole": "worker",
+    "heartbeat": 40
   }
 }
