@@ -4885,21 +4885,7 @@ function bindOrgInteractions(container) {
     await persistConfig();
     renderOrg(document.getElementById('content'));
   });
-  document.getElementById('org-add-agent').addEventListener('click', async () => {
-    const key = prompt('Unique agent key (lowercase, no spaces)?'); if (!key) return;
-    if (STATE.config.agents[key]) return alert('Agent key exists');
-    const roleName = prompt('Role name?'); if (!roleName) return;
-    STATE.config.agents[key] = {
-      roleName, model: 'normal', customModel: '', reasoning: 'medium',
-      heartbeat: 40, harness: 'claude-code', structuralRole: 'worker',
-      manager: null, tools: ['FileSystem'],
-    };
-    // Add to first team or create one
-    if (!STATE.config.org.teams.length) STATE.config.org.teams.push({ id:'default', name:'Default Team', parent:null, members:[] });
-    STATE.config.org.teams[0].members.push(key);
-    await persistConfig();
-    renderOrg(document.getElementById('content'));
-  });
+  document.getElementById('org-add-agent').addEventListener('click', () => openOrgAgentPicker());
   document.getElementById('org-fit').addEventListener('click', () => {
     // Re-tile layout
     STATE.config.org.layout = {};
@@ -4911,6 +4897,158 @@ function bindOrgInteractions(container) {
   });
 
   renderOrgInspector();
+}
+
+// Org Builder agent picker (TKT-ZAF-0052) — replaces blank-slot "+ Agent" with a searchable
+// modal listing every existing agent (Builder + Marketplace), filterable by structural role,
+// CLI, and source (local vs imported). Includes a "Create new" fallback for when no existing
+// agent fits.
+function openOrgAgentPicker() {
+  document.getElementById('zaf-org-picker')?.remove();
+  const conf = STATE.config || {};
+  const agents = Object.entries(conf.agents || {});
+  const teams = (conf.org?.teams || []);
+  const memberships = {}; // agentKey -> Set of teamIds already in
+  for (const t of teams) for (const m of (t.members || [])) {
+    if (!memberships[m]) memberships[m] = new Set();
+    memberships[m].add(t.id);
+  }
+
+  const harnesses = [...new Set(agents.map(([,a]) => a.harness).filter(Boolean))];
+  const structRoles = [...new Set(agents.map(([,a]) => a.structuralRole).filter(Boolean))];
+
+  const modal = document.createElement('div');
+  modal.id = 'zaf-org-picker';
+  modal.className = 'zaf-launch-modal';
+  modal.innerHTML = `
+    <div class="zaf-launch-backdrop"></div>
+    <div class="zaf-launch-panel" style="max-width:760px;width:90vw">
+      <div class="zaf-launch-header">
+        <div>
+          <div class="zaf-launch-title">Pick an agent</div>
+          <div class="zaf-launch-sub">Add an existing agent to the org, or create a new one.</div>
+        </div>
+        <button class="zaf-launch-close" id="org-picker-close" title="Close">✕</button>
+      </div>
+      <div class="zaf-launch-body" style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px">
+          <input id="org-picker-q" placeholder="Search by name or key…" />
+          <select id="org-picker-cli">
+            <option value="">All CLIs</option>
+            ${harnesses.map(h => `<option value="${safeHTML(h)}">${safeHTML(h)}</option>`).join('')}
+          </select>
+          <select id="org-picker-struct">
+            <option value="">All roles</option>
+            ${structRoles.map(r => `<option value="${safeHTML(r)}">${safeHTML(r)}</option>`).join('')}
+          </select>
+          <select id="org-picker-source">
+            <option value="">Any source</option>
+            <option value="local">Local (Builder)</option>
+            <option value="imported">Imported (Marketplace)</option>
+          </select>
+        </div>
+        <select id="org-picker-team" style="margin-top:4px">
+          ${teams.map(t => `<option value="${safeHTML(t.id)}">${safeHTML(t.name)}</option>`).join('') || '<option value="">— no teams yet, will create Default —</option>'}
+        </select>
+        <div id="org-picker-list" style="max-height:46vh;overflow:auto;border:1px solid var(--border-subtle);border-radius:4px"></div>
+        <div style="display:flex;gap:8px;align-items:center;padding-top:4px">
+          <button class="zaf-btn secondary" id="org-picker-create">+ Create new agent…</button>
+          <span style="font-size:11px;color:var(--text-muted)">Opens the legacy prompt flow.</span>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const listEl   = modal.querySelector('#org-picker-list');
+  const qEl      = modal.querySelector('#org-picker-q');
+  const cliEl    = modal.querySelector('#org-picker-cli');
+  const structEl = modal.querySelector('#org-picker-struct');
+  const srcEl    = modal.querySelector('#org-picker-source');
+  const teamEl   = modal.querySelector('#org-picker-team');
+
+  const renderList = () => {
+    const q = (qEl.value || '').toLowerCase();
+    const cli = cliEl.value;
+    const sr  = structEl.value;
+    const src = srcEl.value;
+    const rows = agents.filter(([key, a]) => {
+      if (cli && a.harness !== cli) return false;
+      if (sr && a.structuralRole !== sr) return false;
+      if (src === 'local' && a.source) return false;
+      if (src === 'imported' && !a.source) return false;
+      if (q && !`${a.roleName || ''} ${key}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+    if (!rows.length) {
+      listEl.innerHTML = `<div style="color:var(--text-muted);font-size:12px;padding:18px;text-align:center">No agents match.</div>`;
+      return;
+    }
+    listEl.innerHTML = rows.map(([key, a]) => {
+      const teamId = teamEl.value;
+      const inTeam = memberships[key]?.has(teamId);
+      return `<div class="mkt-agent-card" style="margin:8px;cursor:pointer" data-key="${safeHTML(key)}">
+        <div class="mkt-agent-header">
+          <span class="mkt-agent-name">${safeHTML(a.roleName || key)}</span>
+          <span class="mkt-agent-key">${safeHTML(key)}</span>
+          ${a.source ? '<span class="mkt-badge-imported">imported</span>' : '<span class="mkt-badge-local">local</span>'}
+          ${inTeam ? '<span class="mkt-badge-imported" style="margin-left:auto">already in team</span>' : ''}
+        </div>
+        <div class="mkt-agent-meta">
+          <span>${safeHTML(a.harness || '—')}</span>
+          <span>${safeHTML(a.structuralRole || 'worker')}</span>
+          <span>${safeHTML(a.modelId || a.model || '—')}</span>
+        </div>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll('.mkt-agent-card').forEach(card => {
+      card.addEventListener('click', async () => {
+        const key = card.dataset.key;
+        let teamId = teamEl.value;
+        if (!teams.length) {
+          STATE.config.org.teams.push({ id:'default', name:'Default Team', parent:null, members:[] });
+          teamId = 'default';
+        }
+        const target = STATE.config.org.teams.find(t => t.id === teamId);
+        if (!target) return;
+        target.members = target.members || [];
+        if (target.members.includes(key)) { modal.remove(); return; }
+        target.members.push(key);
+        await persistConfig();
+        modal.remove();
+        renderOrg(document.getElementById('content'));
+      });
+    });
+  };
+
+  qEl.addEventListener('input', renderList);
+  cliEl.addEventListener('change', renderList);
+  structEl.addEventListener('change', renderList);
+  srcEl.addEventListener('change', renderList);
+  teamEl.addEventListener('change', renderList);
+  modal.querySelector('#org-picker-close').addEventListener('click', () => modal.remove());
+  modal.querySelector('.zaf-launch-backdrop').addEventListener('click', () => modal.remove());
+  modal.querySelector('#org-picker-create').addEventListener('click', async () => {
+    const key = prompt('Unique agent key (lowercase, no spaces)?'); if (!key) return;
+    if (STATE.config.agents[key]) return alert('Agent key exists');
+    const roleName = prompt('Role name?'); if (!roleName) return;
+    STATE.config.agents[key] = {
+      roleName, model: 'normal', customModel: '', reasoning: 'medium',
+      heartbeat: 40, harness: 'claude-code', structuralRole: 'worker',
+      manager: null, tools: ['FileSystem'],
+    };
+    let teamId = teamEl.value;
+    if (!STATE.config.org.teams.length) {
+      STATE.config.org.teams.push({ id:'default', name:'Default Team', parent:null, members:[] });
+      teamId = 'default';
+    }
+    const target = STATE.config.org.teams.find(t => t.id === teamId) || STATE.config.org.teams[0];
+    target.members.push(key);
+    await persistConfig();
+    modal.remove();
+    renderOrg(document.getElementById('content'));
+  });
+
+  renderList();
 }
 
 function renderOrgInspector() {
