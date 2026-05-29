@@ -3539,8 +3539,14 @@ function renderControlAgentEditor() {
     <div class="zaf-control-grid">
       <div class="zaf-control-card">
         <h2>Agent Builder</h2>
-        <div class="zaf-field"><label>Select Agent Profile</label>
-          <select id="agent-selector">${keys.map(k => `<option value="${k}" ${k===key?'selected':''}>${agents[k].roleName} (${k})</option>`).join('')}</select>
+        <div class="zaf-field"><label>Editing agent</label>
+          <div style="font-size:10px;color:var(--text-muted);margin:-2px 0 6px;line-height:1.4">
+            Pick which agent to edit. Each row in this list IS the profile — an agent's saved roleName, harness, model, reasoning, structural role, heartbeat and tool set together form a reusable profile. To create a new profile, duplicate an existing agent (sets up a `<key>-copy` you can rename) or use Org Builder's "+ Create new agent".
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="agent-selector" style="flex:1">${keys.map(k => `<option value="${k}" ${k===key?'selected':''}>${agents[k].roleName} (${k})</option>`).join('')}</select>
+            <button type="button" class="zaf-btn secondary" id="agent-dupe-btn" title="Duplicate this agent as a new editable profile">Duplicate</button>
+          </div>
         </div>
         <form id="zaf-agent-form" style="display:flex;flex-direction:column;gap:12px;">
           <div class="zaf-field"><label>Role Name</label><input id="agent-name" value="${safeHTML(a.roleName)}" /></div>
@@ -3665,6 +3671,23 @@ function renderControlAgentEditor() {
 function wireAgentEditor(container) {
   const selector = container.querySelector('#agent-selector');
   selector?.addEventListener('change', () => { STATE.selectedAgentKey = selector.value; renderControl(container); });
+
+  // Duplicate as new profile (TKT-ZAF-0041)
+  container.querySelector('#agent-dupe-btn')?.addEventListener('click', async () => {
+    const key = selector?.value;
+    if (!key) return;
+    try {
+      const r = await fetch('/api/agents/duplicate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'duplicate failed');
+      STATE.config = null;
+      STATE.selectedAgentKey = d.key;
+      renderControl(container);
+    } catch (err) { alert('Duplicate failed: ' + err.message); }
+  });
 
   const slider = container.querySelector('#agent-heartbeat');
   const sliderVal = container.querySelector('#heartbeat-val');
