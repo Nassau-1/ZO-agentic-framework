@@ -998,9 +998,9 @@ const HARNESS_MODEL_IDS = {
     { id: 'claude-opus-4-7',            label: 'Opus 4.7 — highest capability' },
   ],
   'codex': [
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini — fast, low cost' },
-    { id: 'gpt-4o',      label: 'GPT-4o — balanced' },
-    { id: 'o3-mini',     label: 'o3-mini — reasoning' },
+    { id: 'gpt-5',      label: 'GPT-5 — balanced' },
+    { id: 'gpt-5-mini', label: 'GPT-5 mini — fast, low cost' },
+    { id: 'o4-mini',    label: 'o4-mini — reasoning' },
   ],
   'antigravity': [
     { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro — highest capability' },
@@ -3373,9 +3373,11 @@ function renderControlAgentEditor() {
     reasoningNote = 'Codex does not support configurable reasoning level — dropdown has no effect.';
   }
 
-  // Recommended badge
+  // Recommended badge — only meaningful for Claude family (the only family whose model IDs the
+  // recommendations reference); hide for non-Claude CLIs to avoid suggesting Sonnet 4.6 on codex/gemini.
+  const isClaudeFamily = (harness === 'claude-code' || harness === 'claude');
   const rec = ROLE_RECOMMENDATIONS[a.structuralRole];
-  const recBadgeHtml = rec ? `<span class="rec-badge" title="Recommended for ${a.structuralRole}">${rec.label}</span>
+  const recBadgeHtml = (rec && isClaudeFamily) ? `<span class="rec-badge" title="Recommended for ${a.structuralRole}">${rec.label}</span>
     <button type="button" class="use-recommended-btn" id="use-recommended-btn">Use recommended</button>` : '';
 
   return `
@@ -3520,19 +3522,41 @@ ${p.bounds}`;
   container.querySelector('#agent-struct-role')?.addEventListener('change', updatePersona);
   updatePersona();
 
-  // When harness changes, update model dropdown options
+  // When harness changes, update model dropdown options.
+  // Source order (TKT-ZAF-0043): probed CLI models (from /api/cli/discover) merged with curated
+  // defaults in HARNESS_MODEL_IDS. Probed models keep the CLI's own labels; curated defaults
+  // remain a stable fallback when probing returns nothing.
   const harnessSel = container.querySelector('#agent-harness');
   const modelSel   = container.querySelector('#agent-modelid');
-  const updateModelDropdown = () => {
+  const probedModelsCache = {}; // harness -> [{id,label}]
+  const updateModelDropdown = async () => {
     if (!modelSel || !harnessSel) return;
     const h = harnessSel.value;
-    const models = HARNESS_MODEL_IDS[h];
-    if (!models) {
-      modelSel.innerHTML = '<option value="" disabled>N/A for this harness</option>';
+    const curated = HARNESS_MODEL_IDS[h] || [];
+    let probed = probedModelsCache[h];
+    if (probed === undefined) {
+      probed = null;
+      try {
+        const r = await fetch(`/api/cli/discover?harness=${encodeURIComponent(h)}`);
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data.models) && data.models.length) {
+            probed = data.models.map(m => ({ id: m, label: 'probed' }));
+          }
+        }
+      } catch (_) { /* network or probe failure — fall through to curated */ }
+      probedModelsCache[h] = probed;
+    }
+    const merged = [];
+    const seen = new Set();
+    for (const m of (probed || [])) { if (!seen.has(m.id)) { seen.add(m.id); merged.push(m); } }
+    for (const m of curated)         { if (!seen.has(m.id)) { seen.add(m.id); merged.push(m); } }
+    if (!merged.length) {
+      modelSel.innerHTML = '<option value="" disabled>N/A for this harness — operator can edit defaults</option>';
       modelSel.disabled = true;
     } else {
       modelSel.disabled = false;
-      modelSel.innerHTML = models.map(m => `<option value="${m.id}">${m.id} — ${m.label}</option>`).join('');
+      modelSel.innerHTML = merged.map(m => `<option value="${m.id}">${m.id} — ${m.label}</option>`).join('');
     }
     updateReasoningNote();
     updateRecBadge();
@@ -3553,10 +3577,18 @@ ${p.bounds}`;
     }
   };
 
-  // Update recommended badge when structural role changes
+  // Update recommended badge when structural role changes.
+  // Hide entirely when a non-Claude harness is selected (TKT-ZAF-0043) so we don't suggest
+  // Sonnet 4.6 on codex/gemini.
   const updateRecBadge = () => {
     const structRoleSel = container.querySelector('#agent-struct-role');
     const recBadge = container.querySelector('.rec-badge');
+    const recBtn   = container.querySelector('#use-recommended-btn');
+    const h = harnessSel?.value || '';
+    const isClaude = (h === 'claude-code' || h === 'claude');
+    const display = isClaude ? '' : 'none';
+    if (recBadge) recBadge.style.display = display;
+    if (recBtn)   recBtn.style.display   = display;
     if (!structRoleSel || !recBadge) return;
     const rec = ROLE_RECOMMENDATIONS[structRoleSel.value];
     if (rec) recBadge.textContent = rec.label;
