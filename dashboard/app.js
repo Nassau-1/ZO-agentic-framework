@@ -2844,7 +2844,7 @@ function createTuningCallout(harness, meta) {
         body: JSON.stringify({
           title: `Tune structured view parser for ${harness}`,
           description: `## Goal\nCapture 10+ sample runs from the "${harness}" harness, extract output patterns, and update HARNESS_PARSERS in dashboard/app.js.\n\n## Steps\n1. Run the harness on at least 10 varied tickets\n2. Capture raw PTY output (copy from terminal view)\n3. Identify tool.start, tool.end, thinking, response line patterns\n4. Add regex patterns to HARNESS_PARSERS['${harness}'] in dashboard/app.js\n5. Test with real run samples until all event types render correctly`,
-          phase: 'P8', workstream: 'WS-UX', priority: 'P3', role: 'engineering', repo: 'zo-agentic-framework',
+          phase: 'P8', workstream: 'WS-UX', priority: 'P3', role: 'engineering', repo: 'zaf',
         }),
       });
       if (r.ok) {
@@ -3015,7 +3015,7 @@ function renderAudit(container) {
 let _cbCtx = null; // cached context for current repo
 
 async function renderCodebaseMap(container) {
-  const repo = STATE.filters.repo || (STATE.data?.repos?.[0]?.id) || 'zo-agentic-framework';
+  const repo = STATE.filters.repo || (STATE.data?.repos?.[0]?.id) || 'zaf';
   container.innerHTML = `
     <div class="view-graph fade-in" style="display:flex;flex-direction:column;height:100%;gap:0;">
       <div class="graph-toolbar" style="flex-shrink:0;">
@@ -3269,7 +3269,7 @@ function renderControlTicketBuilder() {
       <form id="zaf-ticket-form" style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
         <div class="zaf-field" style="grid-column:1/3"><label>Target Repo</label>
           <select id="tkt-repo">
-            ${(STATE.data?.repos||[]).map(r => `<option value="${r.id}" ${r.id==='zo-agentic-framework'?'selected':''}>${r.id}</option>`).join('')}
+            ${(STATE.data?.repos||[]).map(r => `<option value="${r.id}" ${r.id==='zaf'?'selected':''}>${r.id}</option>`).join('')}
           </select>
         </div>
         <div class="zaf-field" style="grid-column:1/3"><label>Title</label>

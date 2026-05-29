@@ -1,14 +1,14 @@
 {
-  "name": "zo-agentic-framework",
+  "name": "zaf",
   "version": "3.0.0",
-  "description": "Zero to One Agentic Framework (ZO.AF) multi-agent control plane & workspace overlay",
-  "main": "cli/zo.js",
+  "description": "ZAF, the Zero-to-one Agent Framework. A local-first control plane for running agent teams inside software projects.",
+  "main": "cli/zaf.js",
   "bin": {
-    "zo": "./cli/zo.js"
+    "zaf": "./cli/zaf.js"
   },
   "scripts": {
     "start": "cd dashboard && npm start",
-    "cli": "node cli/zo.js"
+    "cli": "node cli/zaf.js"
   },
   "dependencies": {
     "chokidar": "^3.6.0",

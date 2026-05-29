@@ -3,6 +3,26 @@ use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 use tauri::Emitter;
+use std::path::PathBuf;
+
+/// Resolve the absolute path to the dashboard `server.js` regardless of where
+/// the `app.exe` binary is launched from. Walks up from the executable looking
+/// for a `dashboard/server.js` sibling.
+fn resolve_dashboard_server() -> Option<PathBuf> {
+  if let Ok(exe) = std::env::current_exe() {
+    let mut cur = exe.parent().map(|p| p.to_path_buf());
+    while let Some(dir) = cur {
+      let candidate = dir.join("dashboard").join("server.js");
+      if candidate.exists() {
+        return Some(candidate);
+      }
+      cur = dir.parent().map(|p| p.to_path_buf());
+    }
+  }
+  // Hard fallback: the canonical path on T418 if executable lookup fails
+  let fallback = PathBuf::from("C:/Users/LENOVO/Workspace/01_Repos/zaf/dashboard/server.js");
+  if fallback.exists() { Some(fallback) } else { None }
+}
 
 fn trigger_notification(app: &tauri::AppHandle, title: &str, body: &str) {
   let _ = app.notification()
@@ -32,7 +52,7 @@ fn spawn_agent_run(
 
   std::thread::spawn(move || {
     let mut cmd = Command::new("node");
-    cmd.arg("cli/zo.js")
+    cmd.arg("cli/zaf.js")
       .arg("run")
       .arg(&role)
       .arg("--ticket")
@@ -57,7 +77,7 @@ fn spawn_agent_run(
     {
       Ok(c) => c,
       Err(err) => {
-        let err_msg = format!("Failed to spawn zo cli subprocess: {}", err);
+        let err_msg = format!("Failed to spawn zaf CLI subprocess: {}", err);
         println!("{}", err_msg);
         let _ = app.emit("agent-log", err_msg);
         return;
@@ -105,6 +125,52 @@ pub fn run() {
     .plugin(tauri_plugin_notification::init())
     .invoke_handler(tauri::generate_handler![spawn_agent_run])
     .setup(|app| {
+      // Boot the Node sidecar FIRST so the WebView has something to hit on first load.
+      // Redirect stdio to a log file (Windows-subsystem apps have no attached console).
+      let server_started_at = std::time::Instant::now();
+      if let Some(server_path) = resolve_dashboard_server() {
+        let cwd = server_path.parent().map(|p| p.to_path_buf());
+        // Open / truncate the sidecar log next to the dashboard
+        let log_path = cwd.as_ref().map(|c| c.join("sidecar.log"));
+        let log_for_out = log_path.as_ref().and_then(|p| std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(p).ok());
+        let log_for_err = log_path.as_ref().and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
+
+        let mut cmd = std::process::Command::new("node");
+        cmd.arg(&server_path);
+        if let Some(c) = cwd.clone() { cmd.current_dir(c); }
+        if let Some(f) = log_for_out { cmd.stdout(std::process::Stdio::from(f)); }
+        if let Some(f) = log_for_err { cmd.stderr(std::process::Stdio::from(f)); }
+
+        // CREATE_NO_WINDOW=0x08000000 — keep the spawned node.exe headless on Windows.
+        #[cfg(windows)]
+        {
+          use std::os::windows::process::CommandExt;
+          cmd.creation_flags(0x08000000);
+        }
+
+        match cmd.spawn() {
+          Ok(_) => { /* Logged to sidecar.log */ }
+          Err(e) => eprintln!("[ZAF Control] Sidecar spawn failed: {}", e),
+        }
+      } else {
+        eprintln!("[ZAF Control] server.js not found — WebView will show ERR_CONNECTION_REFUSED.");
+      }
+      // Poll up to 8 seconds for the sidecar to bind :4242, then navigate the main window.
+      let app_handle_for_nav = app.app_handle().clone();
+      std::thread::spawn(move || {
+        for _ in 0..80 {
+          if std::net::TcpStream::connect(("127.0.0.1", 4242u16)).is_ok() {
+            if let Some(win) = app_handle_for_nav.get_webview_window("main") {
+              let url = tauri::Url::parse("http://localhost:4242").unwrap();
+              let _ = win.eval(&format!("window.location.replace('{}');", url));
+              println!("[ZAF Control] WebView navigated to {} after {:?}", url, server_started_at.elapsed());
+            }
+            return;
+          }
+          std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        eprintln!("[ZAF Control] Sidecar never bound :4242 within 8s.");
+      });
       // 1. Create Menu Items in Tauri v2
       let handle = app.handle();
       let show = MenuItem::with_id(handle, "show", "Show Dashboard", true, None::<&str>)?;
@@ -137,7 +203,7 @@ pub fn run() {
             }
             "sweep" => {
               println!("[ZAF Control] Triggering AST Parse Sweep...");
-              let app_handle = app.handle().clone();
+              let app_handle = app.app_handle().clone();
               // Spawn background thread to run parse.js
               std::thread::spawn(move || {
                 let _ = std::process::Command::new("node")
@@ -149,7 +215,7 @@ pub fn run() {
             }
             "restart" => {
               println!("[ZAF Control] Restarting ZAF Telemetry Server on port 4242...");
-              let app_handle = app.handle().clone();
+              let app_handle = app.app_handle().clone();
               std::thread::spawn(move || {
                 // Kill any process currently on port 4242 is handled by server.js natively on restart
                 let _ = std::process::Command::new("node")
@@ -160,7 +226,7 @@ pub fn run() {
             }
             "settings" => {
               println!("[ZAF Control] Opening Settings configuration panels.");
-              trigger_notification(app.handle(), "ZAF Settings", "Settings panels are handled in the local config file.");
+              trigger_notification(app.app_handle(), "ZAF Settings", "Settings panels are handled in the local config file.");
             }
             _ => {}
           }
@@ -176,25 +242,14 @@ pub fn run() {
         })
         .build(app)?;
 
-      // 4. Spawn background Node.js server.js sidecar on boot
-      println!("[ZAF Control] Bootstrapping Node.js ZAF Telemetry Server sidecar...");
-      let app_handle = app.handle().clone();
-      std::thread::spawn(move || {
-        let _ = std::process::Command::new("node")
-          .arg("dashboard/server.js")
-          .spawn();
-        // Give the sidecar a tiny fraction of time to start before raising notification
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        trigger_notification(&app_handle, "ZAF Control Plane Active", "ZAF Telemetry Server successfully started on port 4242.");
-      });
-
+      // (Sidecar spawn + poll-and-navigate already started at the top of setup.)
       Ok(())
     })
     .on_window_event(|window, event| match event {
-      tauri::WindowEvent::CloseRequested { prevent_default, .. } => {
-        // Minimize to system tray on window close
+      tauri::WindowEvent::CloseRequested { api, .. } => {
+        // Minimize to system tray on window close (Tauri 2.x: use api.prevent_close)
         let _ = window.hide();
-        *prevent_default = true;
+        api.prevent_close();
       }
       _ => {}
     })

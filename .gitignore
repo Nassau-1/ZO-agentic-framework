@@ -16,6 +16,11 @@ package-lock.json
 
 # Dashboard generated
 dashboard/data.json
+dashboard/dist/data.json
+dashboard/audit-log.jsonl
+dashboard/runs/
+dashboard/sidecar.log
+dashboard/server.log
 
 # OS
 .DS_Store
@@ -26,3 +31,9 @@ Thumbs.db
 # Internal WIP tracking (ignored for public release)
 WIP/
 wip/
+# Demo project under examples/ is part of the public docs - keep its WIP/
+!examples/**/WIP/
+!examples/**/WIP/**
+
+# Tauri build artefacts
+src-tauri/target/

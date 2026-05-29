@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ZAFControl",
+  "productName": "ZAF",
   "version": "0.1.0",
-  "identifier": "com.zaf.control",
+  "identifier": "com.zaf.app",
   "build": {
     "frontendDist": "../dashboard/dist",
     "devUrl": "http://localhost:4242",
@@ -13,13 +13,14 @@
     "windows": [
       {
         "label": "main",
-        "title": "ZO Agentic Framework Control",
-        "width": 1200,
-        "height": 800,
+        "title": "ZAF - Zero-to-one Agent Framework",
+        "width": 1280,
+        "height": 820,
         "resizable": true,
         "fullscreen": false,
-        "transparent": true,
-        "decorations": false
+        "transparent": false,
+        "decorations": true,
+        "url": "http://localhost:4242"
       }
     ],
     "security": {

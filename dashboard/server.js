@@ -419,7 +419,7 @@ function composeSeedPrompt(opts, ticketBody) {
     } catch {}
   }
 
-  return `# ZO.AF Agent Run — ${ticketId}
+  return `# ZAF Agent Run — ${ticketId}
 
 You are operating under the ZO Agentic Framework (ZAF) control plane. Read this entire block before doing anything.
 
@@ -461,7 +461,7 @@ function spawnAgent(opts) {
   const processId = `P-${String(nextProcessId++).padStart(4, '0')}`;
   const startTime = Date.now();
   const startISO = new Date(startTime).toISOString();
-  const repoSlug = repoId || 'zo-agentic-framework';
+  const repoSlug = repoId || 'zaf';
   const repoRoot = path.resolve(REPOS_ROOT, repoSlug);
   const isRealCli = PTY_REAL_HARNESSES.has(harness);
 
@@ -1135,7 +1135,7 @@ const server = http.createServer(async (req, res) => {
       if (entry.prefireTimer) { clearTimeout(entry.prefireTimer); entry.prefireTimer = null; }
       // Append termination note to ticket Handoff Log
       const today = new Date().toISOString().slice(0, 10);
-      const ticketPath = path.join(REPOS_ROOT, entry.meta.repoId || 'zo-agentic-framework', 'WIP', 'tickets', 'ACTIVE', `${entry.meta.ticketId}.md`);
+      const ticketPath = path.join(REPOS_ROOT, entry.meta.repoId || 'zaf', 'WIP', 'tickets', 'ACTIVE', `${entry.meta.ticketId}.md`);
       try {
         let content = fs.readFileSync(ticketPath, 'utf8');
         const logEntry = `\n- ${today} | operator | TERMINATED — killed mid-run from ZAF control plane.`;
@@ -1190,7 +1190,7 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJsonBody(req);
       const { status: newStatus, repo } = payload;
       if (!newStatus) return send(res, 400, { error: 'status required' });
-      const repoSlug = repo || 'zo-agentic-framework';
+      const repoSlug = repo || 'zaf';
       const activeDir = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'ACTIVE');
       const ticketPath = path.join(activeDir, `${ticketId}.md`);
       if (!fs.existsSync(ticketPath)) return send(res, 404, { error: 'ticket not found in ACTIVE/' });
@@ -1217,7 +1217,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const ticketId = ticketArchiveMatch[1];
       const payload = await readJsonBody(req);
-      const repoSlug = payload.repo || 'zo-agentic-framework';
+      const repoSlug = payload.repo || 'zaf';
       const activeDir  = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'ACTIVE');
       const archivedDir = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'ARCHIVED');
       const ticketPath = path.join(activeDir, `${ticketId}.md`);
@@ -1247,7 +1247,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const ticketId = ticketVoidMatch[1];
       const payload = await readJsonBody(req);
-      const repoSlug = payload.repo || 'zo-agentic-framework';
+      const repoSlug = payload.repo || 'zaf';
       const activeDir  = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'ACTIVE');
       const archivedDir = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'ARCHIVED');
       const ticketPath = path.join(activeDir, `${ticketId}.md`);
@@ -1274,7 +1274,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const payload = await readJsonBody(req);
       if (!payload.title) return send(res, 400, { error: 'title required' });
-      const repoSlug = payload.repo || 'zo-agentic-framework';
+      const repoSlug = payload.repo || 'zaf';
       const indexFile = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'TICKETS.md');
       if (!fs.existsSync(indexFile)) return send(res, 404, { error: 'TICKETS.md not found' });
       const phaseLabel = payload.phase || 'P-NEW';
@@ -1326,7 +1326,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const payload = await readJsonBody(req);
       if (!payload.title) return send(res, 400, { error: 'Missing title' });
-      const repoSlug = payload.repo || 'zo-agentic-framework';
+      const repoSlug = payload.repo || 'zaf';
       const activeDir = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'ACTIVE');
       const archivedDir = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'ARCHIVED');
       const indexFile = path.join(REPOS_ROOT, repoSlug, 'WIP', 'tickets', 'TICKETS.md');
@@ -1517,16 +1517,16 @@ ${payload.description || 'Task context and description.'}
       // 5. CLI-scaffold mode: create a ticket and dispatch the agent
       let ticketId = null;
       if (mode === 'cli-scaffold' && agentRole && agentHarness) {
-        const activeDir = path.join(REPOS_ROOT, 'zo-agentic-framework', 'WIP', 'tickets', 'ACTIVE');
+        const activeDir = path.join(REPOS_ROOT, 'zaf', 'WIP', 'tickets', 'ACTIVE');
         if (!fs.existsSync(activeDir)) fs.mkdirSync(activeDir, { recursive: true });
         const allFiles = fs.existsSync(activeDir) ? fs.readdirSync(activeDir) : [];
         let maxNum = 0;
         for (const f of allFiles) { const m = f.match(/^TKT-ZAF-(\d+)\.md$/i); if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10)); }
         ticketId = `TKT-ZAF-${String(maxNum + 1).padStart(4, '0')}`;
         const today = new Date().toISOString().slice(0, 10);
-        const tktContent = `---\nid: ${ticketId}\ntitle: Scaffold new repo ${name}\nstatus: OPEN\nprogramme: PROG-ZAF-001\nworkstream: WS-CLI\nphase: P8\npriority: P2\nproject: ZO Agentic Framework\nrepo: zo-agentic-framework\nteam: engineering\nroles: [${agentRole}]\narchetype: BUILD\nblocks: []\nblocked_by: []\ncreated: ${today}\nupdated: ${today}\nusage_checkpoint: LOW\n---\n\n## Context\n\nScaffold new repository: ${name} (${displayName || name})\nPath: ${localPath}\n${description ? `Description: ${description}\n` : ''}\n## Task\n\n${scaffoldInstructions || 'Initialize the repository with proper ZAF standard structure.'}\n\n## Acceptance Criteria\n\n- [ ] Repository structure matches ZAF standard\n\n## Handoff Log\n\n- ${today} | operator | OPEN — Created via New Repo wizard.\n`;
+        const tktContent = `---\nid: ${ticketId}\ntitle: Scaffold new repo ${name}\nstatus: OPEN\nprogramme: PROG-ZAF-001\nworkstream: WS-CLI\nphase: P8\npriority: P2\nproject: ZO Agentic Framework\nrepo: zaf\nteam: engineering\nroles: [${agentRole}]\narchetype: BUILD\nblocks: []\nblocked_by: []\ncreated: ${today}\nupdated: ${today}\nusage_checkpoint: LOW\n---\n\n## Context\n\nScaffold new repository: ${name} (${displayName || name})\nPath: ${localPath}\n${description ? `Description: ${description}\n` : ''}\n## Task\n\n${scaffoldInstructions || 'Initialize the repository with proper ZAF standard structure.'}\n\n## Acceptance Criteria\n\n- [ ] Repository structure matches ZAF standard\n\n## Handoff Log\n\n- ${today} | operator | OPEN — Created via New Repo wizard.\n`;
         fs.writeFileSync(path.join(activeDir, `${ticketId}.md`), tktContent, 'utf8');
-        spawnAgent({ ticketId, role: agentRole, harness: agentHarness, repoId: 'zo-agentic-framework' });
+        spawnAgent({ ticketId, role: agentRole, harness: agentHarness, repoId: 'zaf' });
       }
 
       auditAppend({ kind: 'repo.create', name, localPath, mode: mode || 'manual', templateName: tpl });
@@ -1821,7 +1821,7 @@ ${payload.description || 'Task context and description.'}
 
   // ── Repo context (codebase map for seed injection) ────────────────────────
   if (pathname === '/api/repo/context') {
-    const repoSlug = parsed.query.repo || 'zo-agentic-framework';
+    const repoSlug = parsed.query.repo || 'zaf';
     const repoRoot = path.resolve(REPOS_ROOT, repoSlug);
     try {
       const ctx = generateRepoContext(repoRoot);
@@ -1836,7 +1836,7 @@ ${payload.description || 'Task context and description.'}
   if (pathname === '/api/repo/codebase-md' && req.method === 'POST') {
     try {
       const payload = await readJsonBody(req);
-      const repoSlug = payload.repo || 'zo-agentic-framework';
+      const repoSlug = payload.repo || 'zaf';
       const repoRoot = path.resolve(REPOS_ROOT, repoSlug);
       const ctx = generateRepoContext(repoRoot);
       const mdPath = path.join(repoRoot, 'CODEBASE.md');

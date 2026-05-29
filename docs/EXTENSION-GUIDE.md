@@ -1,4 +1,4 @@
-# ZO.AF VSCode Extension — User Guide
+# ZAF Control VSCode Extension - User Guide
 
 Extension: `zaf-control` v2.1.0
 File: `<repo>/extension/zaf-control-2.1.0.vsix`
@@ -14,7 +14,7 @@ File: `<repo>/extension/zaf-control-2.1.0.vsix`
 5. Navigate to `<repo>/extension/zaf-control-2.1.0.vsix` and select it.
 6. Reload VSCode when prompted.
 
-The ZO.AF sidebar icon appears in the Activity Bar after reload.
+The ZAF sidebar icon appears in the Activity Bar after reload.
 
 ---
 
@@ -28,10 +28,10 @@ Start the server manually:
 node dashboard/server.js
 ```
 
-Confirm it is running — the terminal should print:
+Confirm it is running - the terminal should print:
 
 ```
-ZO.AF control server listening on port 4242
+ZAF control server listening on port 4242
 ```
 
 Open `http://localhost:4242` in a browser to verify the dashboard loads. Once the server is confirmed, the extension sidebar will populate automatically.
@@ -40,7 +40,7 @@ Open `http://localhost:4242` in a browser to verify the dashboard loads. Once th
 
 ## 3. Sidebar Panels
 
-Press `Ctrl+Alt+Z` or click the ZO.AF icon in the Activity Bar to open the sidebar. Three panels are available:
+Press `Ctrl+Alt+Z` or click the ZAF icon in the Activity Bar to open the sidebar. Three panels are available:
 
 ### Board
 
@@ -76,7 +76,7 @@ In the **Board** panel:
 
 1. Find the ticket you want to work on.
 2. Click the **▶ Launch** button on the ticket card.
-3. A dialog appears asking you to confirm the harness. The default harness is set by `zoaf.defaultHarness` (see section 8). Change it if needed.
+3. A dialog appears asking you to confirm the harness. The default harness is set by `zaf.defaultHarness` (see section 8). Change it if needed.
 4. Click **Confirm**. The sidecar spawns the agent subprocess, and a new entry appears in **Active Shells**.
 
 The launched agent receives an auto-generated seed prompt that includes the ticket goal, acceptance criteria, scope boundaries, and (if available) the `CODEBASE.md` context document.
@@ -93,7 +93,7 @@ To open a mirror:
 2. Find the shell you want to observe.
 3. Click **⬛ Mirror PTY** on that entry.
 
-A new VS Code terminal tab opens named after the process ID and ticket. Output from the agent is streamed in real time. The mirror is read-only — it reflects the agent's actual PTY output but does not send input to the process.
+A new VS Code terminal tab opens named after the process ID and ticket. Output from the agent is streamed in real time. The mirror is read-only - it reflects the agent's actual PTY output but does not send input to the process.
 
 If the terminal opens blank, see Troubleshooting section 11.
 
@@ -101,7 +101,7 @@ If the terminal opens blank, see Troubleshooting section 11.
 
 ## 6. Gutter Decorations
 
-ZO.AF places a small icon in the editor gutter on lines of files that are referenced in active ticket files.
+ZAF places a small icon in the editor gutter on lines of files that are referenced in active ticket files.
 
 A file is "referenced" when its path appears inside backtick code spans in a ticket under `WIP/tickets/ACTIVE/`. For example, if a ticket contains `` `src/auth/session.ts` ``, any open editor showing `src/auth/session.ts` will display the gutter icon on the line nearest the top of the file (or on the specific line number if specified in the ticket).
 
@@ -117,7 +117,7 @@ This makes it immediately visible which files are in scope for active work, with
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+Alt+Z` | Toggle the ZO.AF sidebar open/closed |
+| `Ctrl+Alt+Z` | Toggle the ZAF sidebar open/closed |
 
 No other default shortcuts are registered. Additional keybindings can be added via the standard VSCode keybindings editor (`Ctrl+K Ctrl+S`).
 
@@ -125,13 +125,13 @@ No other default shortcuts are registered. Additional keybindings can be added v
 
 ## 8. Settings
 
-Open settings with `Ctrl+,` and search **ZO.AF** to find all extension settings.
+Open settings with `Ctrl+,` and search **ZAF** to find all extension settings.
 
 | Setting | Default | Description |
 |---|---|---|
-| `zoaf.sidecarUrl` | `http://localhost:4242` | URL of the ZAF sidecar server. Change this to connect to a remote ZAF instance. |
-| `zoaf.autoStartSidecar` | `false` | If `true`, the extension attempts to start `node dashboard/server.js` automatically when VSCode opens. Requires the workspace to be opened at the repo root. |
-| `zoaf.defaultHarness` | `mock` | Default harness pre-selected in the Launch dialog when starting an agent from a ticket card. |
+| `zaf.sidecarUrl` | `http://localhost:4242` | URL of the ZAF sidecar server. Change this to connect to a remote ZAF instance. |
+| `zaf.autoStartSidecar` | `false` | If `true`, the extension attempts to start `node dashboard/server.js` automatically when VSCode opens. Requires the workspace to be opened at the repo root. |
+| `zaf.defaultHarness` | `mock` | Default harness pre-selected in the Launch dialog when starting an agent from a ticket card. |
 
 ---
 
@@ -140,10 +140,10 @@ Open settings with `Ctrl+,` and search **ZO.AF** to find all extension settings.
 To avoid manually running `node dashboard/server.js` each time:
 
 1. Open Settings (`Ctrl+,`).
-2. Search `zoaf.autoStartSidecar`.
+2. Search `zaf.autoStartSidecar`.
 3. Set it to `true`.
 
-When enabled, the extension spawns the sidecar process in the background on VSCode startup. The process is tied to the VSCode window — it stops when the window closes. Output from the auto-started sidecar is visible in the **Output** panel (`Ctrl+Shift+U`) under the **ZO.AF Sidecar** channel.
+When enabled, the extension spawns the sidecar process in the background on VSCode startup. The process is tied to the VSCode window - it stops when the window closes. Output from the auto-started sidecar is visible in the **Output** panel (`Ctrl+Shift+U`) under the **ZAF Sidecar** channel.
 
 Note: auto-start only works when the VSCode workspace root contains `dashboard/server.js`. If you open VSCode in a subdirectory or an unrelated folder, auto-start will silently skip.
 
@@ -154,7 +154,7 @@ Note: auto-start only works when the VSCode workspace root contains `dashboard/s
 To connect to a ZAF instance running on another machine:
 
 1. Open Settings (`Ctrl+,`).
-2. Set `zoaf.sidecarUrl` to the remote server address, for example:
+2. Set `zaf.sidecarUrl` to the remote server address, for example:
    ```
    http://192.168.1.50:4242
    ```
@@ -170,7 +170,7 @@ PTY mirror terminals work over a remote connection as long as the sidecar's `/ap
 
 ### Board shows no tickets
 
-- Confirm the sidecar is running: open `http://localhost:4242` (or your configured `zoaf.sidecarUrl`) in a browser. If the dashboard does not load, the server is not running — start it with `node dashboard/server.js`.
+- Confirm the sidecar is running: open `http://localhost:4242` (or your configured `zaf.sidecarUrl`) in a browser. If the dashboard does not load, the server is not running - start it with `node dashboard/server.js`.
 - Check that ticket files exist under `WIP/tickets/ACTIVE/` or `WIP/tickets/OPEN/`. An empty TICKETS.md or empty subdirectories will result in an empty Board.
 
 ### PTY mirror terminal opens blank
@@ -180,7 +180,7 @@ PTY mirror terminals work over a remote connection as long as the sidecar's `/ap
 
 ### No gutter icons appearing
 
-- Check that the ticket files referencing the current file are in `WIP/tickets/ACTIVE/` — gutter decorations are only generated for **ACTIVE** tickets, not OPEN or BLOCKED.
+- Check that the ticket files referencing the current file are in `WIP/tickets/ACTIVE/` - gutter decorations are only generated for **ACTIVE** tickets, not OPEN or BLOCKED.
 - Confirm that file paths inside the ticket are wrapped in backticks. Plain text paths are not parsed. Example of a correctly formatted reference: `` `src/auth/session.ts` ``.
 - Reload the window (`Ctrl+Shift+P` → **Developer: Reload Window**) to force a re-scan of active tickets.
 
@@ -188,4 +188,4 @@ PTY mirror terminals work over a remote connection as long as the sidecar's `/ap
 
 - Confirm VSCode was reloaded after installing the VSIX.
 - Check the Extensions panel to confirm `zaf-control` appears in the installed list and is enabled.
-- Open the Output panel (`Ctrl+Shift+U`) and select **ZO.AF** from the channel dropdown to see any startup errors.
+- Open the Output panel (`Ctrl+Shift+U`) and select **ZAF** from the channel dropdown to see any startup errors.

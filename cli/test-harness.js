@@ -122,7 +122,7 @@ try {
  
 ## 1. Active Task Context
 *   **Target Ticket ID**: ${ticketId}
-*   **Target Repository**: zo-agentic-framework
+*   **Target Repository**: zaf
 *   **Assigned Role Profile**: ${role}
  
 ## 2. Dynamic Agent Persona & Boundaries

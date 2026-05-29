@@ -1,7 +1,7 @@
 {
   "name": "zaf-control",
-  "displayName": "ZO.AF Control",
-  "description": "ZO Agentic Framework: live ticket board, PTY shells, gutter indicators",
+  "displayName": "ZAF Control",
+  "description": "ZAF (Zero-to-one Agent Framework): live ticket board, PTY shells, gutter indicators",
   "version": "2.1.0",
   "publisher": "nassau-1",
   "engines": {
@@ -14,68 +14,68 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "zoaf-explorer",
-          "title": "ZO.AF",
+          "id": "zaf-explorer",
+          "title": "ZAF",
           "icon": "resources/zaf-icon.svg"
         }
       ]
     },
     "views": {
-      "zoaf-explorer": [
+      "zaf-explorer": [
         {
           "type": "webview",
-          "id": "zoaf.board",
+          "id": "zaf.board",
           "name": "Board"
         },
         {
           "type": "webview",
-          "id": "zoaf.shells",
+          "id": "zaf.shells",
           "name": "Active Shells"
         },
         {
           "type": "webview",
-          "id": "zoaf.audit",
+          "id": "zaf.audit",
           "name": "Audit Log"
         }
       ]
     },
     "commands": [
       {
-        "command": "zoaf.openPanel",
-        "title": "ZO.AF: Open Panel"
+        "command": "zaf.openPanel",
+        "title": "ZAF: Open Panel"
       },
       {
-        "command": "zoaf.launchAgent",
-        "title": "ZO.AF: Launch agent on current ticket"
+        "command": "zaf.launchAgent",
+        "title": "ZAF: Launch agent on current ticket"
       },
       {
-        "command": "zoaf.refresh",
-        "title": "ZO.AF: Refresh"
+        "command": "zaf.refresh",
+        "title": "ZAF: Refresh"
       }
     ],
     "keybindings": [
       {
-        "command": "zoaf.openPanel",
+        "command": "zaf.openPanel",
         "key": "ctrl+alt+z",
         "mac": "ctrl+alt+z"
       }
     ],
     "configuration": {
-      "title": "ZO.AF",
+      "title": "ZAF",
       "properties": {
-        "zoaf.sidecarUrl": {
+        "zaf.sidecarUrl": {
           "type": "string",
           "default": "http://localhost:4242",
           "description": "ZAF sidecar server URL"
         },
-        "zoaf.autoStartSidecar": {
+        "zaf.autoStartSidecar": {
           "type": "boolean",
           "default": false,
           "description": "Auto-start the sidecar server on extension activation"
         },
-        "zoaf.defaultHarness": {
+        "zaf.defaultHarness": {
           "type": "string",
-          "enum": ["mock", "zo", "claude-code", "codex", "gemini-cli"],
+          "enum": ["mock", "zaf", "claude-code", "codex", "gemini-cli"],
           "default": "mock",
           "description": "Default CLI harness for agent launches"
         }

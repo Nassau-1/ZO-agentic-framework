@@ -1,19 +1,25 @@
 {
-  "subscriptions": {
-    "weeklyLimitHours": 20,
-    "weeklyUsedHours": 4.2
-  },
-  "analytics": {
-    "projects": [
-      { "id": "zo", "tokensConsumed": 42100800 },
-      { "id": "zo-agentic-framework", "tokensConsumed": 1284500 }
-    ]
-  },
   "toolsRegistry": [
-    { "id": "FileSystem", "name": "FileSystem Access", "description": "Read/write workspace files & dynamic transient harnesses." },
-    { "id": "ShellSubprocess", "name": "ShellSubprocess Exec", "description": "Spawn CLI commands, run compilers, execute build/test runners." },
-    { "id": "SecurityAudit", "name": "SecurityAudit Scanner", "description": "Execute code vulnerabilities audit and packages checks." },
-    { "id": "DBMigrator", "name": "DBMigrator Integrator", "description": "Manage database schemas, execute custom SQL scripts and migrations." }
+    {
+      "id": "FileSystem",
+      "name": "FileSystem Access",
+      "description": "Read/write workspace files & dynamic transient harnesses."
+    },
+    {
+      "id": "ShellSubprocess",
+      "name": "ShellSubprocess Exec",
+      "description": "Spawn CLI commands, run compilers, execute build/test runners."
+    },
+    {
+      "id": "SecurityAudit",
+      "name": "SecurityAudit Scanner",
+      "description": "Execute code vulnerabilities audit and packages checks."
+    },
+    {
+      "id": "DBMigrator",
+      "name": "DBMigrator Integrator",
+      "description": "Manage database schemas, execute custom SQL scripts and migrations."
+    }
   ],
   "agents": {
     "coo": {
@@ -25,7 +31,15 @@
       "harness": "zo",
       "structuralRole": "thinker",
       "manager": null,
-      "tools": ["FileSystem", "ShellSubprocess", "SecurityAudit"]
+      "tools": [
+        "FileSystem",
+        "ShellSubprocess",
+        "SecurityAudit"
+      ],
+      "modelId": "claude-sonnet-4-6",
+      "personality": "",
+      "team": null,
+      "source": null
     },
     "engineering": {
       "roleName": "Engineering Core",
@@ -36,7 +50,14 @@
       "harness": "claude-code",
       "structuralRole": "worker",
       "manager": "coo",
-      "tools": ["FileSystem", "ShellSubprocess"]
+      "tools": [
+        "FileSystem",
+        "ShellSubprocess"
+      ],
+      "modelId": "claude-sonnet-4-6",
+      "personality": "",
+      "team": null,
+      "source": null
     },
     "testing": {
       "roleName": "Quality & Testing",
@@ -47,7 +68,14 @@
       "harness": "claude-code",
       "structuralRole": "reviewer",
       "manager": "coo",
-      "tools": ["FileSystem", "ShellSubprocess"]
+      "tools": [
+        "FileSystem",
+        "ShellSubprocess"
+      ],
+      "modelId": "claude-haiku-4-5-20251001",
+      "personality": "",
+      "team": null,
+      "source": null
     },
     "data": {
       "roleName": "Data & AI Specialist",
@@ -58,7 +86,13 @@
       "harness": "gemini-cli",
       "structuralRole": "worker",
       "manager": "coo",
-      "tools": ["FileSystem"]
+      "tools": [
+        "FileSystem"
+      ],
+      "modelId": "claude-haiku-4-5-20251001",
+      "personality": "",
+      "team": null,
+      "source": null
     },
     "security": {
       "roleName": "Security Specialist",
@@ -69,7 +103,14 @@
       "harness": "zo",
       "structuralRole": "reviewer",
       "manager": "coo",
-      "tools": ["FileSystem", "SecurityAudit"]
+      "tools": [
+        "FileSystem",
+        "SecurityAudit"
+      ],
+      "modelId": "claude-sonnet-4-6",
+      "personality": "",
+      "team": null,
+      "source": null
     },
     "sre": {
       "roleName": "Site Reliability Engineer",
@@ -80,7 +121,14 @@
       "harness": "mock",
       "structuralRole": "worker",
       "manager": "coo",
-      "tools": ["FileSystem", "ShellSubprocess"]
+      "tools": [
+        "FileSystem",
+        "ShellSubprocess"
+      ],
+      "modelId": "claude-haiku-4-5-20251001",
+      "personality": "",
+      "team": null,
+      "source": null
     }
   },
   "org": {
@@ -90,26 +138,83 @@
         "id": "ops-team",
         "name": "Operations Team",
         "parent": null,
-        "members": ["coo", "sre"]
+        "members": [
+          "coo",
+          "sre"
+        ]
       },
       {
         "id": "dev-team",
         "name": "Development & QA Team",
         "parent": "ops-team",
-        "members": ["engineering", "testing"]
+        "members": [
+          "engineering",
+          "testing"
+        ]
       },
       {
         "id": "intelligence-team",
         "name": "AI & Data Team",
         "parent": "ops-team",
-        "members": ["data"]
+        "members": [
+          "data"
+        ]
       },
       {
         "id": "security-team",
         "name": "Security Team",
         "parent": "ops-team",
-        "members": ["security"]
+        "members": [
+          "security"
+        ]
       }
     ]
+  },
+  "fleet": {
+    "maxConcurrent": 3,
+    "autoDispatchOnStart": false
+  },
+  "agentUsage": {
+    "engineering": {
+      "runs": 17,
+      "secondsTotal": 355.841,
+      "harness": "antigravity",
+      "lastRun": "2026-05-28T21:30:16.576Z"
+    },
+    "coo": {
+      "runs": 7,
+      "secondsTotal": 321.475,
+      "harness": "claude-code",
+      "lastRun": "2026-05-28T15:16:59.631Z"
+    }
+  },
+  "repos": [
+    {
+      "id": "test-scaffold-repo",
+      "name": "Test",
+      "path": "C:/tmp/test-scaffold-repo"
+    }
+  ],
+  "github": {
+    "name": "Nassau-1",
+    "email": "enzoterrier@gmail.com",
+    "pat": "ghp_FAKEPAT999",
+    "defaultRemote": "origin",
+    "authMethod": "ssh"
+  },
+  "customHarnesses": [],
+  "harnessUsage": {
+    "claude-code": {
+      "runs": 3,
+      "successes": 0
+    },
+    "mock": {
+      "runs": 1,
+      "successes": 1
+    },
+    "antigravity": {
+      "runs": 1,
+      "successes": 0
+    }
   }
 }

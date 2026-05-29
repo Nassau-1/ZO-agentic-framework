@@ -1,0 +1,11 @@
+# Placeholder for ZAF screenshots.
+#
+# Expected file names:
+#   dashboard-overview.png
+#   board.png
+#   fleet.png
+#   dependency-graph.png
+#   vscode-extension.png
+#
+# Drop the screenshots here when they become available. The README does not
+# reference these files yet so missing screenshots do not break the docs.
