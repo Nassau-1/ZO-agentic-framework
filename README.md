@@ -1,151 +1,262 @@
-# ZO.AF: from Zero to One Agentic Framework
+# ZO.AF — Zero to One Agentic Framework
 
-> **The Control Plane for "Zero to One" (ZO.AF) Autonomous & Multi-Agent Teams.**
+> **The sovereign control plane for autonomous and multi-agent teams.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Local First](https://img.shields.io/badge/Local--First-Yes-brightgreen)](#)
 [![Stack: Node.js / Vanilla JS](https://img.shields.io/badge/Stack-Node.js%20%2F%20Vanilla%20JS-blue)](#)
 
-Zero to One Agentic Framework (ZO.AF) is a self-hosted, local-first agentic operating system designed to coordinate, run, and visualize teams of autonomous AI agents. Rather than treating agents as simple chatbot conversation partners, ZO.AF establishes a structured control plane—treating agents as scheduled employees with defined roles, clear goal alignment, and deep directory-aware dependency tracking.
+ZO.AF is a self-hosted, local-first agentic operating system for coordinating, running, and visualising teams of autonomous AI agents. It treats agents as structured employees with defined roles, clear goal alignment, and full auditability — not as stateless chat endpoints.
 
-This repository contains the core visualiser, parser, and native live-telemetry server for ZO.AF.
-
----
-
-## ◈ Core Philosophy: From Zero to One (ZO.AF)
-
-Current AI agent frameworks often struggle to scale beyond single-turn inputs or isolated scripts, resulting in runaway costs or "agent drift" (doing busywork instead of the target goal). 
-
-ZO.AF operates on a different set of assumptions:
-1. **Agents as Employees**: Agents have specific roles (e.g., SRE, Sourcing, Intelligence, Design), defined skillsets, and scheduled heartbeats.
-2. **Directory-First State**: Your filesystem is the database. State, ticket definitions, and logs are kept in markdown-based task directories, preventing vendor lock-in.
-3. **Goal-Aware Dependency Graph**: Tasks have clear goal ancestries. Blockers and edges are mapped so agents understand the *why* and *what* of their work and never run out of sync.
+The framework owns the full stack: a live-telemetry control server, a ~5000-line SPA dashboard, a CLI harness runner, a Tauri v2 desktop wrapper, and a VSCode extension that brings the control plane directly into your editor.
 
 ---
 
-## ⊞ Core Features (Current Release)
- 
-### 1. Standalone Multi-Repo Auto-Discovery
-ZO.AF does not rely on a heavy database to monitor your organization. Instead, the native parser (`parse.js`) dynamically scans your development space (`01_Repos/`) to auto-discover active projects, scheduled tasks, and agent programs on the fly. 
- 
-### 2. SSE Live Telemetry Control Server
-A lightweight, zero-dependency Node.js control server (`server.js`) handles HTTP requests and establishes a persistent **Server-Sent Events (SSE)** telemetry stream. The server:
-* Monitors directory changes across all your repositories in real-time.
-* Pushes instant hot-reload signals to connected browsers.
-* Ensures the dashboard updates in **under 1 second** of any ticket or state change.
- 
-### 3. ZAF CLI & Prompt Harness (`cli/zo.js`)
-A command-line control plane that coordinates, scaffolds, and launches agent operations:
-*   **Dynamic Taxonomy Parser**: Parses assigned roles (`docs/agent-taxonomy.md`) to dynamically inject exact personas, directives, and scoping bounds into `.zaf-skill.md`.
-*   **Directory Write Guards**: Imposes strict writable boundaries inside `.zaf-skill.md` to restrict AI agent harness processes to allowed paths.
-*   **Turn Telemetry Tracker**: Scans stdout streams to verify and monitor turn budget thresholds, safely auto-terminating drifting agent subshells.
-*   **File Status Sync Watcher**: Automatically polls active tickets to cleanly terminate subprocess execution once tickets transition to a `DONE` state.
-*   **Automated Validation Suite**: Core CLI logic is fully covered by our automated unit-testing runner (`cli/test-harness.js`).
- 
-### 4. Tauri Desktop Overlay (`src-tauri/`)
-Converts the ZO.AF dashboard and telemetry services into a lightweight standalone utility:
-*   **Rust System Tray**: Native taskbar integration supporting quick telemetry server restarts, parse sweeps, and settings panels.
-*   **Minimize-to-Tray**: Configured hide events on window close requests to keep the utility running as a quiet background service.
-*   **Native Windows Notifications**: Integrates native OS alerts via `tauri-plugin-notification` to notify developers during sweep completions, server boots, or agent alerts.
- 
-### 5. IDE Extension Integration (`extension/`)
-Brings ZAF's tickets, telemetry status cards, and launcher panels directly into standard editors:
-*   **Kanban View Sidebar Container**: Renders vertically stacked columns and detail overlays inside standard VSCode and specialized forks (Antigravity/Cursor).
-*   **Terminal Tab Multiplexing**: Implements click-to-run subshell hooks that create dedicated terminals mapping directly to live agent tasks.
-*   **Gutter Active Indicators**: Gutter warning icons visually flag code files mapped to active ticket scopes.
- 
+## Core Philosophy
+
+1. **Agents as Employees** — Agents carry roles, skillsets, and bounded write permissions. They are scheduled, monitored, and auditable.
+2. **Directory-First State** — The filesystem is the database. Tickets, logs, and agent configs are Markdown files. No vendor lock-in, no external database required.
+3. **Goal-Aware Dependency Graph** — Tasks have explicit blockers and ancestry edges so agents always know the *why* behind their work, not just the *what*.
+4. **Sovereign by Default** — Every component runs locally. The server, the dashboard, the harness runner, and the IDE integration all work without cloud dependencies.
+
 ---
- 
-## 📂 Repository Structure
- 
+
+## Architecture
+
+### `dashboard/server.js` — Control Server (port 4242)
+
+Node.js HTTP + SSE server. Responsibilities:
+
+- **Multi-repo ticket scanning** — watches workspace repos, surfaces tickets into the unified dashboard.
+- **PTY-based agent subprocess spawning** — launches harness processes in pseudo-terminals; streams stdout/stderr in real time.
+- **SSE live-push** — pushes events to all connected dashboard clients in under one second.
+- **Audit log (JSONL)** — every agent event is appended to a structured JSONL audit trail.
+- **Repo context generation** — static analysis pass that writes `CODEBASE.md` and injects it into every agent seed prompt.
+- **Agent Marketplace** — `GET /api/marketplace`, `POST /api/marketplace/import`: import agent packs from a git URL (Format A: `.md` frontmatter, Format B: `agents.json`), preview and select agents, duplicate to local config.
+- **Loop detection** — rolling 20-event window; emits `agent.loop` audit event and offers auto-kill when a loop is detected.
+- **Skill extraction** — `GET /api/process/skills`, `POST /api/skill/save`: pattern analysis over the classified PTY event stream; saves extracted skills as `.zaf-skills/*.zaf-skill.md`.
+- **Agent config persistence** — reads and writes `config.json` for per-agent settings.
+
+### `dashboard/app.js` — Dashboard SPA (~5000 lines, vanilla JS)
+
+Single-page application with full client-side routing. Views:
+
+| View | Description |
+|---|---|
+| **Overview** | Programme health, active agent count, recent audit events |
+| **Programme** | Programme-level goals, phase status, phase completion |
+| **Board** | Kanban board across ticket states (OPEN, ACTIVE, BLOCKED, DONE) |
+| **Fleet** | Live agent roster, per-agent console, harness status |
+| **Dependency Graph** | Force-directed SVG graph of ticket blockers and ancestry |
+| **Archive** | Closed tickets and historical runs |
+| **Codebase Map** | Force-directed SVG file graph generated from static analysis; click-to-inspect symbols; "Generate CODEBASE.md" button |
+| **Control Center** | 5-tab panel: Ticket Builder, Agent Editor, Marketplace, Telemetry, CLI Hub |
+| **Org Builder** | Define and edit agent roles and team structure |
+| **Audit Log** | Searchable, filterable JSONL audit event viewer |
+
+Multi-console terminal panel powered by xterm.js PTY mirrors — each spawned process gets a dedicated console tab with full output replay.
+
+### `dashboard/index.html` — App Shell
+
+Loads xterm.js (CDN), marked.js, and the SPA entry point.
+
+### `dashboard/style.css` + `dashboard/style-paperclip.css` — Design System
+
+Glassmorphic dark design system with CSS custom properties throughout.
+
+### `cli/zo.js` — ZAF CLI
+
+Command-line control plane: `run`, `ticket`, `scaffold` subcommands. Builds and injects seed prompts, manages harness subprocess lifecycle, and coordinates with the control server.
+
+### `src-tauri/` — Desktop App
+
+Tauri v2 wrapper. Features: system tray icon, minimize-to-tray, Node sidecar management, native OS notifications for sweep completions and agent alerts.
+
+### `extension/` — VSCode Extension (`zaf-control` 2.0.0)
+
+Brings the control plane into the editor. See [docs/EXTENSION-GUIDE.md](docs/EXTENSION-GUIDE.md) for full usage.
+
+---
+
+## Agent Harnesses
+
+ZO.AF's subprocess runner accepts a `--harness` flag that selects the agent execution environment. Supported harnesses:
+
+| Harness | Description |
+|---|---|
+| `mock` | Built-in simulator. Generates synthetic PTY output for testing dashboards, loop detection, and skill extraction without running a real AI agent. |
+| `claude-code` | Spawns a Claude Code CLI session scoped to the ticket's allowed paths and seed prompt. |
+| `codex` | OpenAI Codex CLI harness with ZAF seed-prompt injection. |
+| `antigravity` | Antigravity fork of Claude Code; identical interface, alternate binary. |
+| `gemini-cli` | Google Gemini CLI harness. |
+| **Custom** | Any harness can be defined in the Control Center → Agent Editor UI. Custom harnesses specify the binary path, argument template, and environment variables. |
+
+---
+
+## Phase 9 Features
+
+These capabilities were added after the initial release and represent the current production surface:
+
+### Codebase Map
+
+Pure-JS static analysis (no external dependencies) builds a force-directed SVG file graph of the active repo. Nodes are files; edges represent imports, references, and ticket associations. Click any node to inspect its exported symbols. The "Generate CODEBASE.md" button writes a structured context document that is automatically injected into every agent seed prompt, giving agents accurate file-level awareness of the codebase they are operating in.
+
+### Agent Loop Detector
+
+A rolling 20-event window monitors each agent's PTY stream for repetitive patterns. When a loop is detected, the affected console tab shows a pulsing amber ⟳ badge. The operator can acknowledge or trigger an auto-kill of the subprocess. The detection event is written to the audit log as `agent.loop`.
+
+### Session Skill Extractor
+
+After a process completes, pattern analysis runs over the classified PTY event stream to identify reusable skills demonstrated during the session. An "Extract skill" button appears on completed processes. Extracted skills are saved as `.zaf-skills/*.zaf-skill.md` and are auto-injected into the seed prompts of subsequent agent runs, accumulating institutional knowledge across sessions.
+
+### Agent Marketplace
+
+Import agent packs from any git URL directly from the Control Center → Marketplace tab. Two pack formats are supported:
+
+- **Format A** — individual `.md` files with YAML frontmatter defining role, skills, and directives.
+- **Format B** — `agents.json` manifest listing multiple agent definitions.
+
+Preview and select individual agents before importing. Imported agents can be duplicated to local config for customisation. All imported packs are tracked so re-imports are idempotent.
+
+---
+
+## Ticket System
+
+Tickets live under `WIP/tickets/` and follow the ZAF ticket standard (`docs/ticket-standard.md`).
+
+```
+WIP/
+├── tickets/
+│   ├── TICKETS.md          # Master index: all tickets, status, priority, blocked_by
+│   ├── ACTIVE/             # Tickets currently in progress (one .md file per ticket)
+│   ├── OPEN/               # Queued tickets ready to be picked up
+│   ├── BLOCKED/            # Tickets with unresolved blockers
+│   └── DONE/               # Completed tickets (historical reference)
+└── programmes/             # Programme-level goal documents
+```
+
+Each ticket file contains: metadata header (YAML frontmatter), goal statement, acceptance criteria, scope boundaries, and a Handoff Log. The Handoff Log is append-only and serves as the live state for multi-session work — the last entry is always the current state.
+
+The dashboard Board view renders tickets from this directory structure. The Dependency Graph derives blocker edges from `blocked_by` fields in ticket frontmatter.
+
+---
+
+## Repository Structure
+
 ```
 zo-agentic-framework/
-├── .gitignore            # Ignores generated data.json, node_modules, and internal WIP tracking
-├── README.md             # This document
-├── package.json          # Main package configuration and scripts
-├── cli/                  # ZAF command-line control plane
-│   ├── zo.js             # CLI entrypoint with subshell harness and role taxonomy parsing
-│   └── test-harness.js   # Automated telemetry and harness test suite
-├── dashboard/            # Standalone visualizer & control server
-│   ├── server.js         # Native HTTP & SSE telemetry server
-│   ├── parse.js          # File-based multi-repo task parser
-│   ├── app.js            # Frontend SPA logic (routing, interactive graph, SSE listener)
-│   ├── style.css         # Premium Linear-inspired dark design system
-│   ├── index.html        # App shell markup
-│   └── package.json      # Node.js dependencies (gray-matter, chokidar, marked)
-├── src-tauri/            # Tauri Desktop Application wrapper (Rust system tray & sidecars)
-│   ├── Cargo.toml        # Rust package dependencies and configuration
-│   ├── tauri.conf.json   # Tauri configuration, assets, and sidecar mapping
+├── README.md
+├── package.json
+├── cli/
+│   ├── zo.js               # CLI entrypoint: run, ticket, scaffold
+│   └── test-harness.js     # Automated harness and telemetry tests
+├── dashboard/
+│   ├── server.js           # HTTP + SSE control server (port 4242)
+│   ├── app.js              # ~5000-line vanilla-JS SPA
+│   ├── index.html          # App shell (xterm.js, marked.js)
+│   ├── style.css           # Glassmorphic dark design system
+│   ├── style-paperclip.css # Paperclip design layer
+│   └── package.json        # Node dependencies
+├── docs/
+│   ├── agent-taxonomy.md   # Role definitions and persona specs
+│   ├── app-design.md       # Dashboard UX design notes
+│   ├── cli-design.md       # CLI architecture notes
+│   ├── coo-spec.md         # COO agent specification
+│   ├── extension-design.md # VSCode extension design notes
+│   ├── EXTENSION-GUIDE.md  # VSCode extension user guide
+│   ├── programme-standard.md
+│   ├── session-bootstrap.md
+│   └── ticket-standard.md
+├── extension/
+│   ├── package.json        # Extension manifest, settings, sidebar views
+│   ├── extension.js        # PTY mirror terminals, gutter decorations, webviews
+│   ├── resources/          # Gutter decorator icons and assets
+│   └── zaf-control-2.0.0.vsix  # Packaged extension (install from VSIX)
+├── src-tauri/
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
 │   └── src/
-│       ├── main.rs       # Rust app launcher
-│       └── lib.rs        # Tauri tray menus, minimize events, and native OS notifications
-└── extension/            # VSCode / Antigravity IDE Extension integration
-    ├── package.json      # Manifest, configuration settings, and sidebar views containers
-    ├── extension.js      # Terminal multiplexing and gutter indicators logic
-    └── resources/        # Gutter decorators and custom assets
+│       ├── main.rs         # Rust app launcher
+│       └── lib.rs          # Tray, minimize-to-tray, notifications
+└── WIP/
+    ├── tickets/            # ACTIVE/, OPEN/, BLOCKED/, DONE/, TICKETS.md
+    └── programmes/         # Programme goal documents
 ```
- 
+
 ---
- 
-## ⚡ Quick Start
- 
-### 1. Requirements
-* [Node.js](https://nodejs.org/) (v18 or higher)
-* NPM
-* [Rust/Cargo](https://www.rust-lang.org/) (only required if building/compiling the native Tauri app locally)
- 
-### 2. Installation
-Clone the repository and install the dependencies for the dashboard:
+
+## Quick Start
+
+### Requirements
+
+- [Node.js](https://nodejs.org/) v18 or higher
+- npm
+
+Rust/Cargo is only needed if building the Tauri desktop app from source.
+
+### 1. Install dashboard dependencies
+
 ```bash
 cd dashboard
 npm install
 ```
- 
-### 3. Running the Telemetry Server
-Start the local control server:
+
+### 2. Start the control server
+
 ```bash
-npm start
-# or: node server.js
+node dashboard/server.js
+# Server starts on http://localhost:4242
 ```
-The server will start on port `4242` and begin watching the workspace directories for updates.
- 
-### 4. Running the ZAF CLI
-You can execute tasks, query status, or scaffold new tickets via the ZAF CLI:
+
+Open `http://localhost:4242` in a browser to access the dashboard.
+
+### 3. ZAF CLI usage
+
 ```bash
-# Display general help
+# Show help
 node cli/zo.js
- 
-# Query the status of an active ticket
+
+# Query ticket status
 node cli/zo.js ticket status TKT-ZAF-0005
- 
-# Scaffold and index a brand new ticket in TICKETS.md
+
+# Create a new ticket
 node cli/zo.js ticket create "Implement database auth schema"
- 
-# Spin up a sovereign subprocess CLI harness
+
+# Launch an agent harness
 node cli/zo.js run engineering --ticket TKT-ZAF-0006 --harness mock
+
+# Launch with Claude Code harness
+node cli/zo.js run engineering --ticket TKT-ZAF-0007 --harness claude-code
 ```
- 
-### 5. Running the Automated Harness Tests
-Validate prompt harvesters, dynamic taxonomy builders, and turn telemetry budgets:
+
+### 4. Run the test suite
+
 ```bash
 node cli/test-harness.js
 ```
- 
+
+### 5. VSCode Extension
+
+Install `extension/zaf-control-2.0.0.vsix` from the Extensions panel. See [docs/EXTENSION-GUIDE.md](docs/EXTENSION-GUIDE.md) for the full setup guide.
+
 ---
- 
-## 🛠 Tech Stack
-* **Backend**: Node.js, `chokidar` (file system watcher), `gray-matter` (front-matter parser)
-* **Desktop Shell**: Rust, Tauri v2, `tauri-plugin-notification`
-* **IDE Extension**: VSCode Extension API, JavaScript, CSS, HTML Webview panels
-* **Frontend**: Vanilla HTML5, CSS3 Custom Properties (CSS variables), Vanilla ES6 JavaScript
-* **Visualizations**: Direct SVG elements rendered on a native canvas (no heavy graph frameworks needed)
-* **Markdown Rendering**: `marked.js`
- 
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Control server | Node.js, `chokidar`, `gray-matter`, PTY (node-pty) |
+| Dashboard frontend | Vanilla HTML5 / CSS3 / ES6, xterm.js, marked.js |
+| Visualisations | Pure-JS force-directed SVG (no graph framework dependencies) |
+| Desktop shell | Rust, Tauri v2, `tauri-plugin-notification` |
+| IDE extension | VSCode Extension API, JavaScript, xterm.js |
+
 ---
- 
-## 📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
- 
-## 👤 Author
-**Enzo Terrier**
-* GitHub: [@nassau-1](https://github.com/nassau-1)
+
+## License
+
+MIT — see LICENSE file for details.
+
+## Author
+
+**Enzo Terrier** — [@nassau-1](https://github.com/nassau-1)

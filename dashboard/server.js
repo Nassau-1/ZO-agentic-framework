@@ -48,6 +48,215 @@ const processes = new Map();                   // processId -> { proc, meta, buf
 let nextProcessId = 1;
 const fleetProcessIds = new Set();             // processIds spawned via fleet dispatch
 
+// ─── Repo context generator (TKT-ZAF-0025) ───────────────────────────────────
+// Pure FS + regex — no external binaries, no LSP. Cap at 4000 chars.
+
+const REPO_CONTEXT_CACHE = new Map(); // repoRoot -> { ts, contextBlock, graph }
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', 'target', 'coverage', '.turbo', 'out', '.cache']);
+
+function walkDir(dirPath, maxDepth, depth = 0) {
+  if (depth > maxDepth) return [];
+  let results = [];
+  let entries;
+  try { entries = fs.readdirSync(dirPath, { withFileTypes: true }); } catch { return []; }
+  for (const e of entries) {
+    if (e.name.startsWith('.') && e.name !== '.zaf-skills') continue;
+    if (IGNORE_DIRS.has(e.name)) continue;
+    const full = path.join(dirPath, e.name);
+    if (e.isDirectory()) {
+      results = results.concat(walkDir(full, maxDepth, depth + 1));
+    } else if (e.isFile()) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+const SRC_EXTS = new Set(['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.rb', '.php']);
+
+function extractSymbols(filePath, content) {
+  const symbols = [];
+  const ext = path.extname(filePath);
+  if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
+    const patterns = [
+      /^export\s+(?:default\s+)?(?:async\s+)?function\s+(\w+)/gm,
+      /^export\s+(?:const|let|var)\s+(\w+)\s*=/gm,
+      /^export\s+class\s+(\w+)/gm,
+      /^(?:async\s+)?function\s+(\w+)\s*\(/gm,
+      /^class\s+(\w+)/gm,
+    ];
+    for (const re of patterns) {
+      for (const m of content.matchAll(re)) symbols.push(m[1]);
+    }
+  } else if (ext === '.py') {
+    for (const m of content.matchAll(/^(?:async\s+)?def\s+(\w+)\s*\(/gm)) symbols.push(m[1]);
+    for (const m of content.matchAll(/^class\s+(\w+)/gm)) symbols.push(m[1]);
+  }
+  return [...new Set(symbols)].slice(0, 8);
+}
+
+function extractImports(filePath, content) {
+  const imports = [];
+  const ext = path.extname(filePath);
+  const dir = path.dirname(filePath);
+  if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
+    const patterns = [
+      /^import\s+.+?\s+from\s+['"](\.[^'"]+)['"]/gm,
+      /require\s*\(\s*['"](\.[^'"]+)['"]\s*\)/gm,
+    ];
+    for (const re of patterns) {
+      for (const m of content.matchAll(re)) {
+        const rel = m[1];
+        const exts = ['', '.js', '.ts', '.jsx', '.tsx', '/index.js', '/index.ts'];
+        for (const x of exts) {
+          const resolved = path.resolve(dir, rel + x);
+          imports.push(resolved);
+        }
+      }
+    }
+  }
+  return imports;
+}
+
+function generateRepoContext(repoRoot) {
+  const cached = REPO_CONTEXT_CACHE.get(repoRoot);
+  if (cached && Date.now() - cached.ts < 60000) return cached;
+
+  const t0 = Date.now();
+  const allFiles = walkDir(repoRoot, 4);
+  const srcFiles = allFiles.filter(f => SRC_EXTS.has(path.extname(f)));
+  const repoName = path.basename(repoRoot);
+
+  // Build file metadata and import graph
+  const fileData = {}; // relPath -> { symbols, size, imports }
+  for (const f of srcFiles) {
+    let content = '';
+    try { content = fs.readFileSync(f, 'utf8'); } catch { continue; }
+    const rel = path.relative(repoRoot, f).replace(/\\/g, '/');
+    const symbols = extractSymbols(f, content);
+    const importPaths = extractImports(f, content);
+    fileData[rel] = { symbols, size: content.length, imports: importPaths };
+  }
+
+  // Check for CODEBASE.md
+  let codebaseMdExists = false;
+  try { fs.accessSync(path.join(repoRoot, 'CODEBASE.md')); codebaseMdExists = true; } catch {}
+
+  // Build directory summary (top-level dirs with file counts)
+  const dirCounts = {};
+  for (const rel of Object.keys(fileData)) {
+    const top = rel.split('/')[0];
+    dirCounts[top] = (dirCounts[top] || 0) + 1;
+  }
+
+  // Build graph nodes and edges
+  const fileSet = new Set(Object.keys(fileData).map(r => path.join(repoRoot, r)));
+  const graphNodes = Object.entries(fileData).map(([rel, d]) => ({
+    id: rel,
+    label: path.basename(rel),
+    dir: rel.split('/')[0],
+    size: d.size,
+    symbols: d.symbols,
+  }));
+  const graphEdges = [];
+  for (const [rel, d] of Object.entries(fileData)) {
+    for (const imp of d.imports) {
+      const exts = ['', '.js', '.ts', '.jsx', '.tsx'];
+      for (const x of exts) {
+        const candidate = imp + x;
+        if (fileSet.has(candidate)) {
+          const toRel = path.relative(repoRoot, candidate).replace(/\\/g, '/');
+          if (toRel !== rel) graphEdges.push({ from: rel, to: toRel });
+          break;
+        }
+      }
+    }
+  }
+
+  // Build structured context block (capped at 4000 chars)
+  const lines = [`REPO: ${repoName}`, `FILES: ${Object.keys(fileData).length} source files`, `STRUCTURE:`];
+  const sortedRels = Object.keys(fileData).sort();
+  for (const rel of sortedRels) {
+    const d = fileData[rel];
+    const desc = d.symbols.length ? d.symbols.slice(0, 3).join(', ') : path.basename(rel, path.extname(rel));
+    lines.push(`  ${rel} — ${desc}`);
+  }
+  lines.push(`KEY SYMBOLS:`);
+  for (const rel of sortedRels) {
+    const d = fileData[rel];
+    for (const sym of d.symbols.slice(0, 4)) {
+      lines.push(`  ${sym}() → ${rel}`);
+    }
+  }
+
+  let contextBlock = lines.join('\n');
+  if (contextBlock.length > 4000) {
+    contextBlock = contextBlock.slice(0, 3997) + '…';
+  }
+
+  const result = {
+    ts: Date.now(),
+    contextBlock,
+    fileCount: Object.keys(fileData).length,
+    graph: { nodes: graphNodes, edges: graphEdges },
+    codebaseMdExists,
+    ms: Date.now() - t0,
+  };
+  REPO_CONTEXT_CACHE.set(repoRoot, result);
+  return result;
+}
+
+// ─── Agent Marketplace helpers ───────────────────────────────────────────────
+
+function parseFrontmatter(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return {};
+  const fm = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const colon = line.indexOf(':');
+    if (colon === -1) continue;
+    fm[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+  }
+  return fm;
+}
+
+function bodyAfterFrontmatter(content) {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
+}
+
+function parseAgentPack(scanRoot, sourceUrl) {
+  // Format B — agents.json array takes priority
+  const agentsJsonPath = path.join(scanRoot, 'agents.json');
+  if (fs.existsSync(agentsJsonPath)) {
+    try {
+      const arr = JSON.parse(fs.readFileSync(agentsJsonPath, 'utf8'));
+      if (Array.isArray(arr)) return arr.map(a => ({ ...a, source: sourceUrl }));
+    } catch { /* fall through to Format A */ }
+  }
+  // Format A — .md files with frontmatter (name/role field required)
+  const agents = [];
+  const MD_EXTS = new Set(['.md', '.markdown']);
+  const files = walkDir(scanRoot, 2);
+  for (const f of files) {
+    if (!MD_EXTS.has(path.extname(f).toLowerCase())) continue;
+    let content;
+    try { content = fs.readFileSync(f, 'utf8'); } catch { continue; }
+    const fm = parseFrontmatter(content);
+    if (!fm.name && !fm.role) continue;
+    agents.push({
+      roleName:      fm.name || fm.role,
+      personality:   bodyAfterFrontmatter(content),
+      harness:       fm.harness || 'mock',
+      modelId:       fm.model_id || fm.modelId || 'claude-sonnet-4-6',
+      reasoning:     fm.reasoning || 'medium',
+      structuralRole: fm.structural_role || fm.structuralRole || 'worker',
+      team:          fm.team || null,
+      source:        sourceUrl,
+    });
+  }
+  return agents;
+}
+
 // ─── Audit Log (append-only) ─────────────────────────────────────────────────
 
 function auditAppend(event) {
@@ -180,6 +389,36 @@ function composeSeedPrompt(opts, ticketBody) {
   const { ticketId, role, modelId, model, reasoning, heartbeat, promptAddendum, ticketTitle, repoName, personality } = opts;
   const effectiveModel = modelId || model || '(default for this CLI)';
   const personalitySection = personality ? `\n## Personality & Scope\n${personality}\n` : '';
+
+  // Inject codebase context if CODEBASE.md exists in the repo root
+  let codebaseSection = '';
+  let skillsSection = '';
+  if (repoName) {
+    const repoRoot = path.resolve(REPOS_ROOT, repoName);
+    const codebaseMdPath = path.join(repoRoot, 'CODEBASE.md');
+    try {
+      const md = fs.readFileSync(codebaseMdPath, 'utf8');
+      const snippet = md.slice(0, 3000);
+      codebaseSection = `\n## Codebase Map\n\n${snippet}${md.length > 3000 ? '\n…(truncated)' : ''}\n`;
+    } catch {}
+    // Inject .zaf-skills/*.zaf-skill.md (up to 3 most recent, TKT-ZAF-0036)
+    const skillsDir = path.join(repoRoot, '.zaf-skills');
+    try {
+      const skillFiles = fs.readdirSync(skillsDir)
+        .filter(f => f.endsWith('.zaf-skill.md'))
+        .map(f => ({ f, mtime: fs.statSync(path.join(skillsDir, f)).mtime }))
+        .sort((a, b) => b.mtime - a.mtime)
+        .slice(0, 3);
+      if (skillFiles.length) {
+        const blocks = skillFiles.map(({ f }) => {
+          const body = fs.readFileSync(path.join(skillsDir, f), 'utf8').slice(0, 800);
+          return `### ${f}\n${body}`;
+        });
+        skillsSection = `\n## Extracted Skills\n\n${blocks.join('\n\n---\n\n')}\n`;
+      }
+    } catch {}
+  }
+
   return `# ZO.AF Agent Run — ${ticketId}
 
 You are operating under the ZO Agentic Framework (ZAF) control plane. Read this entire block before doing anything.
@@ -191,7 +430,7 @@ You are operating under the ZO Agentic Framework (ZAF) control plane. Read this 
 - **Model target**: ${effectiveModel}
 - **Reasoning level**: ${reasoning || 'medium'}
 - **Heartbeat interval**: ${heartbeat || '40'} seconds
-${personalitySection}
+${personalitySection}${codebaseSection}${skillsSection}
 ## Ticket body
 
 \`\`\`markdown
@@ -310,7 +549,7 @@ function spawnAgent(opts) {
   };
 
   const buffer = []; // PTY byte chunks for replay: { data: base64, ts }
-  const entry = { proc: ptyProc, meta, buffer };
+  const entry = { proc: ptyProc, meta, buffer, toolCallLog: [], toolCallCount: 0, loopFired: false };
   processes.set(processId, entry);
 
   auditAppend({ kind: 'process.spawn', processId, ticketId, role, harness, modelId: effectiveModelId, reasoning, heartbeat, cmd: meta.cmd });
@@ -342,6 +581,30 @@ function spawnAgent(opts) {
       else if (/\[API REQUEST\]|🌐|HTTP request/i.test(line)) auditKind = 'agent.api_request';
       else if (/\[DECISION\]|🧠|Decision|planning/i.test(line)) auditKind = 'agent.decision';
       if (auditKind) auditAppend({ kind: auditKind, processId, ticketId, role, line: line.slice(0, 200) });
+
+      // Loop detection (TKT-ZAF-0035)
+      if (auditKind === 'agent.tool_call' && !entry.loopFired) {
+        entry.toolCallCount++;
+        const prefix = line.slice(0, 60);
+        entry.toolCallLog.push(prefix);
+        if (entry.toolCallLog.length > 20) entry.toolCallLog.shift();
+        // Check: same prefix ≥4 times in rolling window OR total > 80
+        const prefixCount = entry.toolCallLog.filter(p => p === prefix).length;
+        if (prefixCount >= 4 || entry.toolCallCount > 80) {
+          entry.loopFired = true;
+          const loopMsg = prefixCount >= 4
+            ? `Loop detected: same tool call repeated ${prefixCount}× in last 20 events — "${prefix.slice(0, 50)}"`
+            : `Loop detected: ${entry.toolCallCount} tool calls total (context exhaustion risk)`;
+          broadcast({ event: 'process.loop_warning', processId, msg: loopMsg, toolCallCount: entry.toolCallCount });
+          auditAppend({ kind: 'agent.loop', processId, ticketId, role, msg: loopMsg });
+          // Auto-kill if configured
+          const conf = readConfig();
+          if (conf?.autoKillOnLoop) {
+            try { ptyProc.kill(); } catch {}
+            auditAppend({ kind: 'agent.loop-kill', processId, ticketId, role, msg: 'Auto-killed due to loop detection' });
+          }
+        }
+      }
 
       // Rate-limit detection (TKT-ZAF-0015)
       if (ratePat && ratePat.test(line) && meta.status === 'running') {
@@ -729,6 +992,81 @@ const server = http.createServer(async (req, res) => {
     const entry = processes.get(id);
     if (!entry) return send(res, 404, { error: 'unknown processId' });
     send(res, 200, { meta: entry.meta, buffer: entry.buffer, isPty: true });
+    return;
+  }
+
+  // ── Skill extractor: analyse completed process (TKT-ZAF-0036) ────────────
+  if (pathname === '/api/process/skills' && req.method === 'GET') {
+    const id = parsed.query.id;
+    const entry = processes.get(id);
+    if (!entry) return send(res, 404, { error: 'unknown processId' });
+    // Decode buffer into lines of ANSI-stripped text
+    const ansiRe2 = /\x1b\[[0-9;]*[mGKHABCDEFJST]/g;
+    const lines = [];
+    for (const chunk of entry.buffer) {
+      const raw = Buffer.from(chunk.data, 'base64').toString('utf8');
+      const text = raw.replace(ansiRe2, '');
+      lines.push(...text.split(/\r?\n/).filter(l => l.trim()));
+    }
+    // Extract classified event sequence
+    const events = lines.map(l => {
+      if (/\[TOOL CALL\]|🛠️|Executing tool/i.test(l)) return { kind: 'tool-call', content: l.slice(0, 80) };
+      if (/\[API REQUEST\]|🌐|HTTP request/i.test(l)) return { kind: 'api-request', content: l.slice(0, 80) };
+      if (/\[DECISION\]|🧠|Decision|planning/i.test(l)) return { kind: 'decision', content: l.slice(0, 80) };
+      if (/\[RESULT\]|✓|Done|completed successfully/i.test(l)) return { kind: 'tool-end', content: l.slice(0, 80) };
+      if (/^(>|│|\|)\s/.test(l) || l.length > 20) return { kind: 'response', content: l.slice(0, 80) };
+      return null;
+    }).filter(Boolean);
+    // Find repeated sub-sequences of length ≥3 appearing ≥2 times
+    const candidates = [];
+    for (let len = 5; len >= 3; len--) {
+      for (let i = 0; i <= events.length - len; i++) {
+        const subseq = events.slice(i, i + len);
+        const sig = subseq.map(e => e.kind + ':' + e.content.slice(0, 30)).join('|');
+        let count = 0;
+        for (let j = 0; j <= events.length - len; j++) {
+          const s2 = events.slice(j, j + len).map(e => e.kind + ':' + e.content.slice(0, 30)).join('|');
+          if (s2 === sig) count++;
+        }
+        if (count >= 2) {
+          if (!candidates.find(c => c.sig === sig)) {
+            const toolCalls = subseq.filter(e => e.kind === 'tool-call').map(e => e.content.replace(/^.*?(🛠️|\[TOOL CALL\]|Executing tool)\s*/i, '').slice(0, 40));
+            const firstDecision = subseq.find(e => e.kind === 'decision' || e.kind === 'response');
+            candidates.push({
+              sig,
+              name: toolCalls[0] ? toolCalls[0].replace(/[^a-z0-9]/gi, '-').toLowerCase().slice(0, 40) : `pattern-${candidates.length + 1}`,
+              description: firstDecision?.content?.slice(0, 200) || 'Repeated workflow pattern',
+              steps: subseq.map((e, idx) => `${idx + 1}. ${e.kind}: ${e.content.slice(0, 60)}`),
+              tools: [...new Set(toolCalls)],
+              occurrences: count,
+              context: { ticketId: entry.meta.ticketId, role: entry.meta.role, harness: entry.meta.harness },
+            });
+          }
+        }
+      }
+    }
+    send(res, 200, { candidates, eventCount: events.length, processId: id });
+    return;
+  }
+
+  // ── Skill save ────────────────────────────────────────────────────────────
+  if (pathname === '/api/skill/save' && req.method === 'POST') {
+    try {
+      const { name, description, steps, tools, sourceProcess, sourceTicket, repoName } = await readJsonBody(req);
+      if (!name) return send(res, 400, { error: 'name required' });
+      const repoRoot = path.resolve(REPOS_ROOT, repoName || '');
+      if (!fs.existsSync(repoRoot)) return send(res, 404, { error: 'repo not found' });
+      const skillDir = path.join(repoRoot, '.zaf-skills');
+      fs.mkdirSync(skillDir, { recursive: true });
+      const safeName = name.replace(/[^a-z0-9-]/gi, '-').toLowerCase().slice(0, 60);
+      const skillPath = path.join(skillDir, `${safeName}.zaf-skill.md`);
+      const toolsYaml = (tools || []).map(t => `  - ${t}`).join('\n');
+      const stepsText = (steps || []).join('\n');
+      const content = `---\nname: ${safeName}\ndescription: ${description || ''}\ntools:\n${toolsYaml || '  []'}\nsource: extracted\nextractedFrom: ${sourceTicket || ''}\nextractedProcess: ${sourceProcess || ''}\ncreated: ${new Date().toISOString().slice(0, 10)}\n---\n\n## Workflow\n\n${stepsText}\n`;
+      fs.writeFileSync(skillPath, content, 'utf8');
+      auditAppend({ kind: 'skill.extracted', name: safeName, sourceProcess, sourceTicket, repoName });
+      send(res, 200, { path: `.zaf-skills/${safeName}.zaf-skill.md`, created: true });
+    } catch (e) { send(res, 500, { error: e.message }); }
     return;
   }
 
@@ -1275,6 +1613,240 @@ ${payload.description || 'Task context and description.'}
       auditAppend({ kind: 'harness.custom-add', id, displayName });
       send(res, 200, { status: 'ok', id });
     } catch (e) { send(res, 400, { error: e.message }); }
+    return;
+  }
+
+  // ── Agent marketplace: preview pack from git URL ──────────────────────────
+  if (pathname === '/api/marketplace/preview' && req.method === 'POST') {
+    try {
+      const { url, subdir } = await readJsonBody(req);
+      if (!url) return send(res, 400, { error: 'url required' });
+      const tmpBase = path.join(require('os').tmpdir(), 'zaf-marketplace');
+      fs.mkdirSync(tmpBase, { recursive: true });
+      const slug = url.replace(/[^a-z0-9]/gi, '-').slice(-40);
+      const tmpDir = path.join(tmpBase, slug);
+      if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
+      execSync(`git clone --depth 1 "${url}" "${tmpDir}"`, { timeout: 30000 });
+      const scanRoot = subdir ? path.join(tmpDir, subdir) : tmpDir;
+      const agents = parseAgentPack(scanRoot, url);
+      send(res, 200, { agents, count: agents.length, source: url });
+    } catch (e) {
+      send(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // ── Agent marketplace: import selected agents ──────────────────────────────
+  if (pathname === '/api/marketplace/import' && req.method === 'POST') {
+    try {
+      const { agents, source } = await readJsonBody(req);
+      if (!Array.isArray(agents) || !agents.length) return send(res, 400, { error: 'agents array required' });
+      const conf = readConfig() || {};
+      conf.agents = conf.agents || {};
+      conf.importedPacks = conf.importedPacks || [];
+      const now = new Date().toISOString();
+      let imported = 0;
+      for (const a of agents) {
+        const roleKey = (a.roleKey || a.roleName || 'imported').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 32);
+        if (conf.agents[roleKey]) continue; // skip duplicates silently
+        conf.agents[roleKey] = {
+          roleName: a.roleName || roleKey,
+          modelId: a.modelId || 'claude-sonnet-4-6',
+          reasoning: a.reasoning || 'medium',
+          heartbeat: a.heartbeat || 40,
+          harness: a.harness || 'mock',
+          structuralRole: a.structuralRole || 'worker',
+          personality: a.personality || '',
+          team: a.team || null,
+          manager: null,
+          tools: a.tools || [],
+          source,
+          importedAt: now,
+        };
+        imported++;
+      }
+      if (!conf.importedPacks.find(p => p.source === source)) {
+        conf.importedPacks.push({ source, importedAt: now, count: imported });
+      }
+      writeConfig(conf);
+      auditAppend({ kind: 'marketplace.import', source, count: imported });
+      send(res, 200, { imported, total: agents.length });
+    } catch (e) {
+      send(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // ── Agent duplicate ────────────────────────────────────────────────────────
+  if (pathname === '/api/agents/duplicate' && req.method === 'POST') {
+    try {
+      const { key } = await readJsonBody(req);
+      const conf = readConfig() || {};
+      const src = conf.agents?.[key];
+      if (!src) return send(res, 404, { error: 'Agent not found: ' + key });
+      const newKey = key + '-copy';
+      const finalKey = conf.agents[newKey] ? newKey + '-' + Date.now() : newKey;
+      conf.agents[finalKey] = { ...src, source: null, importedAt: undefined };
+      writeConfig(conf);
+      auditAppend({ kind: 'agent.duplicate', from: key, to: finalKey });
+      send(res, 200, { key: finalKey });
+    } catch (e) {
+      send(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // ── Marketplace: check for updates (TKT-ZAF-0037) ───────────────────────
+  if (pathname === '/api/marketplace/check-updates' && req.method === 'POST') {
+    try {
+      const { source } = await readJsonBody(req);
+      if (!source) return send(res, 400, { error: 'source required' });
+      const tmpBase = path.join(require('os').tmpdir(), 'zaf-marketplace');
+      fs.mkdirSync(tmpBase, { recursive: true });
+      const slug = source.replace(/[^a-z0-9]/gi, '-').slice(-40);
+      const tmpDir = path.join(tmpBase, slug + '-update-' + Date.now());
+      execSync(`git clone --depth 1 "${source}" "${tmpDir}"`, { timeout: 30000 });
+      const incoming = parseAgentPack(tmpDir, source);
+      const conf = readConfig() || {};
+      const localAgents = Object.entries(conf.agents || {}).filter(([, a]) => a.source === source);
+      const incomingMap = new Map(incoming.map(a => {
+        const k = (a.roleName || '').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 32);
+        return [k, a];
+      }));
+      const localMap = new Map(localAgents.map(([k, a]) => [k, a]));
+      const added    = [];
+      const changed  = [];
+      const removed  = [];
+      for (const [key, agent] of incomingMap) {
+        if (!localMap.has(key)) { added.push({ key, agent }); }
+        else {
+          const loc = localMap.get(key);
+          if ((loc.personality || '') !== (agent.personality || '') ||
+              (loc.harness || '') !== (agent.harness || '')) {
+            changed.push({ key, incoming: agent, local: loc });
+          }
+        }
+      }
+      for (const [key] of localMap) {
+        if (!incomingMap.has(key)) removed.push({ key, agent: localMap.get(key) });
+      }
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      send(res, 200, { added, changed, removed, source });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // ── Marketplace: apply updates (TKT-ZAF-0037) ────────────────────────────
+  if (pathname === '/api/marketplace/apply-updates' && req.method === 'POST') {
+    try {
+      const { source, updates } = await readJsonBody(req);
+      if (!source || !Array.isArray(updates)) return send(res, 400, { error: 'source and updates required' });
+      const conf = readConfig() || {};
+      conf.agents = conf.agents || {};
+      let applied = 0;
+      for (const { key, agent } of updates) {
+        const existing = conf.agents[key];
+        if (existing && existing.source === source) {
+          conf.agents[key] = { ...existing, ...agent, source, importedAt: existing.importedAt };
+          applied++;
+        } else if (!existing) {
+          // New agent from pack
+          conf.agents[key] = { ...agent, source, importedAt: new Date().toISOString() };
+          applied++;
+        }
+      }
+      writeConfig(conf);
+      auditAppend({ kind: 'marketplace.update', source, applied });
+      send(res, 200, { applied });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // ── Skills library: list saved skills for a repo (TKT-ZAF-0038) ──────────
+  if (pathname === '/api/repo/skills' && req.method === 'GET') {
+    const repoSlug = parsed.query.repo;
+    if (!repoSlug) return send(res, 400, { error: 'repo required' });
+    const skillsDir = path.join(path.resolve(REPOS_ROOT, repoSlug), '.zaf-skills');
+    try {
+      if (!fs.existsSync(skillsDir)) return send(res, 200, { skills: [] });
+      const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.zaf-skill.md'));
+      const skills = files.map(f => {
+        const content = fs.readFileSync(path.join(skillsDir, f), 'utf8');
+        const fm = parseFrontmatter(content);
+        return {
+          filename: f,
+          name: fm.name || f.replace('.zaf-skill.md', ''),
+          description: fm.description || '',
+          tools: fm.tools ? fm.tools.split(',').map(t => t.trim().replace(/^-\s*/, '')).filter(Boolean) : [],
+          source: fm.source || 'manual',
+          extractedFrom: fm.extractedFrom || '',
+          created: fm.created || '',
+          body: bodyAfterFrontmatter(content),
+        };
+      });
+      send(res, 200, { skills });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // ── Skills library: update skill file (TKT-ZAF-0038) ──────────────────────
+  if (pathname === '/api/repo/skill/update' && req.method === 'POST') {
+    try {
+      const { repo, filename, content } = await readJsonBody(req);
+      if (!repo || !filename || !content) return send(res, 400, { error: 'repo, filename, content required' });
+      if (!/^[\w-]+\.zaf-skill\.md$/.test(filename)) return send(res, 400, { error: 'invalid filename' });
+      const skillPath = path.join(path.resolve(REPOS_ROOT, repo), '.zaf-skills', filename);
+      if (!fs.existsSync(skillPath)) return send(res, 404, { error: 'skill not found' });
+      fs.writeFileSync(skillPath, content, 'utf8');
+      auditAppend({ kind: 'skill.updated', repo, filename });
+      send(res, 200, { ok: true });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // ── Skills library: delete skill file (TKT-ZAF-0038) ──────────────────────
+  if (pathname === '/api/repo/skill/delete' && req.method === 'POST') {
+    try {
+      const { repo, filename } = await readJsonBody(req);
+      if (!repo || !filename) return send(res, 400, { error: 'repo and filename required' });
+      if (!/^[\w-]+\.zaf-skill\.md$/.test(filename)) return send(res, 400, { error: 'invalid filename' });
+      const skillPath = path.join(path.resolve(REPOS_ROOT, repo), '.zaf-skills', filename);
+      if (!fs.existsSync(skillPath)) return send(res, 404, { error: 'skill not found' });
+      fs.unlinkSync(skillPath);
+      auditAppend({ kind: 'skill.deleted', repo, filename });
+      send(res, 200, { ok: true });
+    } catch (e) { send(res, 500, { error: e.message }); }
+    return;
+  }
+
+  // ── Repo context (codebase map for seed injection) ────────────────────────
+  if (pathname === '/api/repo/context') {
+    const repoSlug = parsed.query.repo || 'zo-agentic-framework';
+    const repoRoot = path.resolve(REPOS_ROOT, repoSlug);
+    try {
+      const ctx = generateRepoContext(repoRoot);
+      send(res, 200, ctx);
+    } catch (e) {
+      send(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // ── Generate CODEBASE.md ───────────────────────────────────────────────────
+  if (pathname === '/api/repo/codebase-md' && req.method === 'POST') {
+    try {
+      const payload = await readJsonBody(req);
+      const repoSlug = payload.repo || 'zo-agentic-framework';
+      const repoRoot = path.resolve(REPOS_ROOT, repoSlug);
+      const ctx = generateRepoContext(repoRoot);
+      const mdPath = path.join(repoRoot, 'CODEBASE.md');
+      const content = `# Codebase Map — ${repoSlug}\n\nGenerated ${new Date().toISOString()}\n\n\`\`\`\n${ctx.contextBlock}\n\`\`\`\n`;
+      fs.writeFileSync(mdPath, content, 'utf8');
+      auditAppend({ kind: 'repo.codebase-md', repo: repoSlug, path: mdPath, files: ctx.fileCount });
+      send(res, 200, { path: mdPath, files: ctx.fileCount, chars: ctx.contextBlock.length });
+    } catch (e) {
+      send(res, 500, { error: e.message });
+    }
     return;
   }
 

@@ -1,61 +1,83 @@
 {
   "name": "zaf-control",
-  "displayName": "ZO Agentic Framework Control",
-  "description": "IDE Control Panel & Telemetry for the ZAF multi-agent harness overlay.",
-  "version": "1.0.0",
+  "displayName": "ZO.AF Control",
+  "description": "ZO Agentic Framework: live ticket board, PTY shells, gutter indicators",
+  "version": "2.1.0",
   "publisher": "nassau-1",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.85.0"
   },
-  "categories": [
-    "Other"
-  ],
-  "activationEvents": [
-    "onView:zaf-sidebar-panel"
-  ],
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
   "main": "./extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "zaf-control-explorer",
-          "title": "ZAF Control",
+          "id": "zoaf-explorer",
+          "title": "ZO.AF",
           "icon": "resources/zaf-icon.svg"
         }
       ]
     },
     "views": {
-      "zaf-control-explorer": [
+      "zoaf-explorer": [
         {
           "type": "webview",
-          "id": "zaf-sidebar-panel",
-          "name": "ZO Active Board"
+          "id": "zoaf.board",
+          "name": "Board"
+        },
+        {
+          "type": "webview",
+          "id": "zoaf.shells",
+          "name": "Active Shells"
+        },
+        {
+          "type": "webview",
+          "id": "zoaf.audit",
+          "name": "Audit Log"
         }
       ]
     },
+    "commands": [
+      {
+        "command": "zoaf.openPanel",
+        "title": "ZO.AF: Open Panel"
+      },
+      {
+        "command": "zoaf.launchAgent",
+        "title": "ZO.AF: Launch agent on current ticket"
+      },
+      {
+        "command": "zoaf.refresh",
+        "title": "ZO.AF: Refresh"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "zoaf.openPanel",
+        "key": "ctrl+alt+z",
+        "mac": "ctrl+alt+z"
+      }
+    ],
     "configuration": {
-      "title": "ZO Agentic Framework",
+      "title": "ZO.AF",
       "properties": {
-        "zaf.reposRoot": {
+        "zoaf.sidecarUrl": {
           "type": "string",
-          "default": "~/Workspace/01_Repos",
-          "description": "Absolute path to local repositories root folder."
+          "default": "http://localhost:4242",
+          "description": "ZAF sidecar server URL"
         },
-        "zaf.defaultHarness": {
+        "zoaf.autoStartSidecar": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-start the sidecar server on extension activation"
+        },
+        "zoaf.defaultHarness": {
           "type": "string",
-          "enum": [
-            "claude",
-            "codex",
-            "gemini",
-            "mock"
-          ],
-          "default": "claude",
-          "description": "Default sovereign CLI harness to use during execution."
-        },
-        "zaf.budgetHardStopCents": {
-          "type": "integer",
-          "default": 5000,
-          "description": "Hard stop cost ceiling in cents for safety loops."
+          "enum": ["mock", "zo", "claude-code", "codex", "gemini-cli"],
+          "default": "mock",
+          "description": "Default CLI harness for agent launches"
         }
       }
     }

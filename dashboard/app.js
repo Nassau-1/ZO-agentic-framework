@@ -84,6 +84,10 @@ const STATE = {
   cliHubProcesses: new Map(),  // processId -> { harnessId, kind: 'install'|'connect' }
   cliHubStatus: {},            // harnessId -> { installed, version }
   cliHubConnected: {},         // harnessId -> connected-at timestamp string
+  // Agent view (TKT-ZAF-0021)
+  agentViewActive: new Map(),  // processId -> bool
+  agentTextBuffers: new Map(), // processId -> accumulated stripped-ANSI text string
+  agentLineCursors: new Map(), // processId -> int (line count already rendered to agent view)
 };
 
 // =========================================================================
@@ -303,6 +307,11 @@ function connectSSE() {
           updateFleetBadge();
           if (STATE.currentView === 'fleet') renderFleet(document.getElementById('content'));
           break;
+        case 'process.loop_warning':
+          STATE.processLoopFlags = STATE.processLoopFlags || {};
+          STATE.processLoopFlags[msg.processId] = { msg: msg.msg, toolCallCount: msg.toolCallCount };
+          renderConsoleTabs();
+          break;
         case 'process.cleared':
           for (const [id, p] of STATE.processes) {
             if (p.meta.status !== 'running' && p.meta.status !== 'pre-fire') STATE.processes.delete(id);
@@ -388,6 +397,7 @@ function renderView(view) {
     case 'control':   renderControl(c);   break;
     case 'org':       renderOrg(c);       break;
     case 'audit':     renderAudit(c);     break;
+    case 'codebase':  renderCodebaseMap(c); break;
     default:          renderOverview(c);
   }
 }
@@ -993,7 +1003,14 @@ const HARNESS_MODEL_IDS = {
     { id: 'o3-mini',     label: 'o3-mini — reasoning' },
   ],
   'antigravity': [
-    { id: 'placeholder', label: '(stub — TBD from README)' },
+    { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro — highest capability' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — balanced' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — fast' },
+  ],
+  'gemini-cli': [
+    { id: 'gemini-2.5-pro',   label: 'Gemini 2.5 Pro — highest capability' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — balanced' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash — fast' },
   ],
 };
 
@@ -1171,7 +1188,7 @@ function openLaunchPopover(ticket) {
     });
   });
 
-  setTimeout(() => modelInput.focus(), 50);
+  setTimeout(() => modelSel?.focus(), 50);
 }
 
 function triggerAgentRun(opts) {
@@ -2021,7 +2038,6 @@ function onProcessEnd(meta) {
 // PTY byte chunk received — write to xterm.js terminal (with dedup by ts, TKT-ZAF-0023)
 function onProcessPty(processId, base64Data, ts) {
   const term = STATE.terminals.get(processId);
-  if (!term) return;
   if (ts !== undefined) {
     const lastTs = STATE.terminalLastTs.get(processId) || 0;
     if (ts <= lastTs) return;
@@ -2031,7 +2047,12 @@ function onProcessPty(processId, base64Data, ts) {
     const binary = atob(base64Data);
     const arr = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
-    term.write(arr);
+    if (term) term.write(arr);
+    // Feed agent text buffer (TKT-ZAF-0021)
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(arr);
+    const prev = STATE.agentTextBuffers.get(processId) || '';
+    STATE.agentTextBuffers.set(processId, prev + stripAnsi(text));
+    if (STATE.agentViewActive.get(processId)) feedAgentViewLive(processId);
   } catch {}
 }
 
@@ -2116,6 +2137,7 @@ function renderConsoleTabs() {
               : `${((Date.now() - meta.startTime)/1000).toFixed(0)}s+`;
     const isActive = STATE.activeProcessTab === meta.processId;
     const prefireId = `prefire-badge-${meta.processId}`;
+    const loopFlag = (STATE.processLoopFlags || {})[meta.processId];
     return `
       <div class="console-tab ${isActive?'active':''}" data-process-id="${meta.processId}">
         <span class="tab-status-dot ${statusClass}"></span>
@@ -2123,6 +2145,7 @@ function renderConsoleTabs() {
         <span class="tab-meta">${meta.role} · ${meta.ticketId}</span>
         <span class="tab-meta">${dur}</span>
         ${meta.status === 'pre-fire' || meta.status === 'pre-fire-paused' ? `<span id="${prefireId}" class="tab-meta" style="color:#f59e0b">⏱ pre-fire</span>` : ''}
+        ${loopFlag ? `<span class="tab-loop-badge" title="${safeHTML(loopFlag.msg)}">⟳ loop</span>` : ''}
         <span class="tab-close" data-close="${meta.processId}" title="Remove from tabs">✕</span>
       </div>`;
   }
@@ -2155,7 +2178,12 @@ function renderConsoleTabs() {
           <span>Heartbeat<strong> ${meta.heartbeat || '—'}s</strong></span>
           <span class="console-body-status">Status<strong> ${meta.status}</strong></span>
         </div>
-        <div class="xterm-host" id="xterm-host-${meta.processId}" style="height:340px;background:#0a0a0f;"></div>
+        <div class="console-view-toggle">
+          <button class="view-toggle-btn active" data-view="terminal" data-pid="${meta.processId}">Terminal</button>
+          <button class="view-toggle-btn" data-view="agent" data-pid="${meta.processId}">Agent</button>
+        </div>
+        <div class="xterm-host" id="xterm-host-${meta.processId}" style="height:320px;background:#0a0a0f;"></div>
+        <div class="agent-view" id="agent-view-${meta.processId}" style="display:none;"></div>
         <div class="steer-row" data-steer-for="${meta.processId}" style="display:flex;gap:6px;padding:6px;border-top:1px solid #1a1a20;align-items:center;">
           <input type="text" class="steer-input" placeholder="Send input to agent…" style="flex:1;background:#111118;color:#e0e0e8;border:1px solid #2a2a35;border-radius:4px;padding:5px 8px;font-family:monospace;font-size:12px;" />
           <button class="steer-send zaf-btn secondary" style="padding:5px 10px;font-size:11px;" data-steer-pid="${meta.processId}">Send</button>
@@ -2164,6 +2192,10 @@ function renderConsoleTabs() {
           <label style="font-size:11px;color:#666;display:flex;align-items:center;gap:4px;cursor:pointer;">
             <input type="checkbox" class="pause-prefire-chk" data-pause-pid="${meta.processId}" ${meta.status==='pre-fire-paused'?'checked':''} />Pause pre-fire
           </label>
+        </div>
+        <div class="skill-extract-row" data-skill-for="${meta.processId}" style="display:none;padding:6px 8px;border-top:1px solid #1a1a20;">
+          <button class="console-btn skill-extract-btn" data-pid="${meta.processId}" data-repo="${meta.repoId || ''}">⊕ Extract skill from this run</button>
+          <div class="skill-extract-panel" id="skill-panel-${meta.processId}" style="display:none;margin-top:8px"></div>
         </div>`;
       bodiesEl.appendChild(body);
       // Initialize xterm.js terminal
@@ -2176,6 +2208,18 @@ function renderConsoleTabs() {
     // Show/hide steer row based on status
     const steerRow = body.querySelector('.steer-row');
     if (steerRow) steerRow.style.display = isRunning ? 'flex' : 'none';
+    // Show skill extract row for completed processes (TKT-ZAF-0036)
+    const skillRow = body.querySelector('.skill-extract-row');
+    if (skillRow) skillRow.style.display = meta.status === 'completed' ? 'block' : 'none';
+    // Loop warning callout (TKT-ZAF-0035)
+    const loopFlag = (STATE.processLoopFlags || {})[meta.processId];
+    let loopCallout = body.querySelector('.loop-warning-callout');
+    if (loopFlag && !loopCallout) {
+      loopCallout = document.createElement('div');
+      loopCallout.className = 'loop-warning-callout';
+      loopCallout.innerHTML = `<span class="loop-warning-icon">⟳</span><span>${safeHTML(loopFlag.msg)}</span><span style="color:#f59e0b;margin-left:auto;font-size:11px">Consider killing or steering this process.</span>`;
+      body.insertBefore(loopCallout, body.querySelector('.xterm-host') || body.firstChild);
+    }
   }
   for (const stale of existingBodies) {
     bodiesEl.querySelector(`.console-body[data-process-id="${stale}"]`)?.remove();
@@ -2243,6 +2287,111 @@ function renderConsoleTabs() {
       const pid = chk.dataset.pausePid;
       if (chk.checked) {
         fetch(`/api/process/${encodeURIComponent(pid)}/pause-prefire`, { method: 'POST' });
+      }
+    };
+  });
+
+  // Skill extract buttons (TKT-ZAF-0036)
+  bodiesEl.querySelectorAll('.skill-extract-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const pid = btn.dataset.pid;
+      const repoId = btn.dataset.repo;
+      const panel = document.getElementById(`skill-panel-${pid}`);
+      if (!panel) return;
+      if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+      btn.disabled = true;
+      btn.textContent = 'Analysing…';
+      panel.style.display = 'block';
+      panel.innerHTML = `<div style="color:var(--text-muted);font-size:12px">Scanning event sequence…</div>`;
+      try {
+        const r = await fetch(`/api/process/skills?id=${encodeURIComponent(pid)}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Failed');
+        if (!d.candidates.length) {
+          panel.innerHTML = `<div style="color:var(--text-secondary);font-size:12px">No repeating workflow pattern detected in this run (${d.eventCount} events analysed).</div>`;
+          return;
+        }
+        let html = `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">${d.candidates.length} skill candidate${d.candidates.length !== 1 ? 's' : ''} found (${d.eventCount} events)</div>`;
+        for (const c of d.candidates) {
+          const cid = `skill-cand-${pid}-${c.name}`;
+          html += `<div class="skill-candidate-card" id="${cid}">
+            <div class="skill-cand-header">
+              <span class="skill-cand-name">${safeHTML(c.name)}</span>
+              <span class="skill-cand-meta">${c.occurrences}× · ${c.steps.length} steps</span>
+            </div>
+            <div class="skill-cand-desc">${safeHTML(c.description)}</div>
+            ${c.tools.length ? `<div class="skill-cand-tools">${c.tools.map(t => `<span class="skill-tool-tag">${safeHTML(t)}</span>`).join('')}</div>` : ''}
+            <div class="skill-cand-steps">${c.steps.map(s => `<div>${safeHTML(s)}</div>`).join('')}</div>
+            <div class="skill-cand-actions">
+              <button class="console-btn skill-save-btn" data-cid="${safeHTML(cid)}" data-pid="${safeHTML(pid)}" data-repo="${safeHTML(repoId)}" data-name="${safeHTML(c.name)}" data-desc="${safeHTML(c.description)}" data-steps="${safeHTML(JSON.stringify(c.steps))}" data-tools="${safeHTML(JSON.stringify(c.tools))}">Save as .zaf-skill.md</button>
+              <button class="console-btn skill-dismiss-btn" data-cid="${safeHTML(cid)}">Dismiss</button>
+            </div>
+          </div>`;
+        }
+        panel.innerHTML = html;
+        // Wire save/dismiss
+        panel.querySelectorAll('.skill-save-btn').forEach(sb => {
+          sb.onclick = async () => {
+            sb.disabled = true;
+            sb.textContent = 'Saving…';
+            try {
+              const proc = STATE.processes.get(sb.dataset.pid);
+              const sr = await fetch('/api/skill/save', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: sb.dataset.name,
+                  description: sb.dataset.desc,
+                  steps: JSON.parse(sb.dataset.steps),
+                  tools: JSON.parse(sb.dataset.tools),
+                  sourceProcess: sb.dataset.pid,
+                  sourceTicket: proc?.meta?.ticketId || '',
+                  repoName: sb.dataset.repo,
+                }),
+              });
+              const sd = await sr.json();
+              if (!sr.ok) throw new Error(sd.error || 'Save failed');
+              sb.textContent = `✓ Saved: ${sd.path}`;
+              sb.style.color = 'var(--status-done, #10b981)';
+            } catch (e) {
+              sb.textContent = 'Error: ' + e.message;
+              sb.disabled = false;
+            }
+          };
+        });
+        panel.querySelectorAll('.skill-dismiss-btn').forEach(db => {
+          db.onclick = () => {
+            const card = document.getElementById(db.dataset.cid);
+            if (card) card.remove();
+            if (!panel.querySelector('.skill-candidate-card')) panel.innerHTML = '<div style="color:var(--text-muted);font-size:12px">All candidates dismissed.</div>';
+          };
+        });
+      } catch (e) {
+        panel.innerHTML = `<div style="color:var(--status-blocked);font-size:12px">Error: ${safeHTML(e.message)}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '⊕ Extract skill from this run';
+      }
+    };
+  });
+
+  // Terminal / Agent view toggle (TKT-ZAF-0021)
+  bodiesEl.querySelectorAll('.view-toggle-btn').forEach(btn => {
+    btn.onclick = () => {
+      const pid = btn.dataset.pid;
+      const view = btn.dataset.view;
+      const body = bodiesEl.querySelector(`.console-body[data-process-id="${pid}"]`);
+      if (!body) return;
+      const xtermHost = body.querySelector(`#xterm-host-${pid}`);
+      const agentViewEl = body.querySelector(`#agent-view-${pid}`);
+      body.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.toggle('active', b === btn));
+      if (view === 'terminal') {
+        if (xtermHost) xtermHost.style.display = '';
+        if (agentViewEl) agentViewEl.style.display = 'none';
+        STATE.agentViewActive.set(pid, false);
+      } else {
+        if (xtermHost) xtermHost.style.display = 'none';
+        if (agentViewEl) { agentViewEl.style.display = ''; initAgentView(pid, agentViewEl); }
+        STATE.agentViewActive.set(pid, true);
       }
     };
   });
@@ -2379,6 +2528,418 @@ function appendActiveTabLine(msg) {
 }
 
 // =========================================================================
+// AGENT VIEW — STREAM PARSER + HTML RENDERER (TKT-ZAF-0021)
+// =========================================================================
+
+function stripAnsi(str) {
+  return str
+    .replace(/\x1B\][^\x07\x1B]*\x07/g, '')        // OSC + BEL terminator (window title etc.)
+    .replace(/\x1B\][^\x1B]*\x1B\\/g, '')           // OSC + ST terminator
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, ''); // CSI and single-char escapes
+}
+
+// Harness-isolated parser map. Each entry: { isStub: bool, parse(lines) -> events[] }
+const HARNESS_PARSERS = {
+  'mock': {
+    isStub: false,
+    parse(lines) {
+      const events = [];
+      for (const line of lines) {
+        const l = line.trim();
+        if (!l) continue;
+        if (/^\[TOOL CALL\]/i.test(l)) {
+          const args = l.replace(/^\[TOOL CALL\]\s*/i, '');
+          const name = args.split(/\s+/)[0] || 'Tool';
+          events.push({ type: 'tool.start', name, args });
+        } else if (/^\[API REQUEST\]/i.test(l)) {
+          events.push({ type: 'tool.start', name: 'API', args: l.replace(/^\[API REQUEST\]\s*/i, '') });
+        } else if (/^\[DECISION\]/i.test(l)) {
+          events.push({ type: 'thinking', content: l.replace(/^\[DECISION\]\s*/i, '') });
+        } else if (/^✓|^done\b/i.test(l)) {
+          events.push({ type: 'tool.end', name: 'command', durationMs: null, ok: true });
+        } else if (/^✗|^error\b/i.test(l)) {
+          events.push({ type: 'tool.end', name: 'command', durationMs: null, ok: false });
+        } else {
+          events.push({ type: 'response', content: l });
+        }
+      }
+      return events;
+    },
+  },
+
+  'claude-code': {
+    isStub: false,
+    parse(lines) {
+      const events = [];
+      let inToolOutput = false;
+      let currentTool = null;
+      let toolOutputLines = [];
+
+      const flushToolOutput = () => {
+        if (toolOutputLines.length) {
+          events.push({ type: 'tool.output', content: toolOutputLines.join('\n') });
+          toolOutputLines = [];
+        }
+      };
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const l = line.trim();
+        if (!l) continue;
+
+        // tool.start: ◆ or ● prefix
+        if (/^[◆●]\s+(Bash|Read|Write|Edit|Glob|Grep|WebFetch|Task|TodoWrite|WebSearch|Agent|mcp\S*)/i.test(l)) {
+          flushToolOutput();
+          const m = l.match(/^[◆●]\s+(\S+)\s*(.*)/);
+          currentTool = m ? m[1] : 'Tool';
+          events.push({ type: 'tool.start', name: currentTool, args: m ? m[2] : '' });
+          inToolOutput = true;
+          continue;
+        }
+
+        // tool.end: ✓ or ✗
+        if (/^[✓✗]\s+\w/.test(l)) {
+          flushToolOutput();
+          const ok = l.startsWith('✓');
+          const durMatch = l.match(/\((\d+(?:\.\d+)?)s\)/);
+          const durationMs = durMatch ? Math.round(parseFloat(durMatch[1]) * 1000) : null;
+          const name = l.replace(/^[✓✗]\s+/, '').split(/[\s(]/)[0] || currentTool || 'Tool';
+          events.push({ type: 'tool.end', name, durationMs, ok });
+          inToolOutput = false;
+          currentTool = null;
+          continue;
+        }
+
+        // thinking delimiters
+        if (l === '<thinking>') { inToolOutput = false; continue; }
+        if (l === '</thinking>') { continue; }
+
+        // tool output: pipe prefix or 4-space indent while inToolOutput
+        if (inToolOutput && (l.startsWith('│') || line.startsWith('    '))) {
+          toolOutputLines.push(l.replace(/^│\s?/, ''));
+          continue;
+        }
+
+        if (inToolOutput) {
+          flushToolOutput();
+          inToolOutput = false;
+        }
+
+        // diff hunk
+        if (/^[+-]{3}\s/.test(l) || /^@@.*@@/.test(l)) {
+          events.push({ type: 'diff.block', filename: l, before: '', after: l });
+          continue;
+        }
+
+        events.push({ type: 'response', content: l });
+      }
+      flushToolOutput();
+      return events;
+    },
+  },
+
+  'codex': {
+    isStub: false,
+    parse(lines) {
+      const events = [];
+      let currentTool = null;
+      for (const line of lines) {
+        const l = line.trim();
+        if (!l) continue;
+        if (/^>\s*(running|executing):/i.test(l)) {
+          const args = l.replace(/^>\s*(running|executing):\s*/i, '');
+          currentTool = args.split(/\s+/)[0] || 'command';
+          events.push({ type: 'tool.start', name: currentTool, args });
+        } else if (/^<\s*(done|error)/i.test(l)) {
+          events.push({ type: 'tool.end', name: currentTool || 'command', durationMs: null, ok: /done/i.test(l) });
+          currentTool = null;
+        } else {
+          events.push({ type: 'response', content: l });
+        }
+      }
+      return events;
+    },
+  },
+
+  'antigravity': {
+    isStub: false,
+    parse(lines) {
+      const events = [];
+      let currentTool = null;
+      let inThinking = false;
+      let toolOutputLines = [];
+      const flushOutput = () => {
+        if (toolOutputLines.length) {
+          events.push({ type: 'tool.output', content: toolOutputLines.join('\n') });
+          toolOutputLines = [];
+        }
+      };
+      for (const line of lines) {
+        const l = line.trim();
+        if (!l) continue;
+
+        // Thinking blocks (Gemini-style)
+        if (/^<thinking>$/i.test(l)) { inThinking = true; continue; }
+        if (/^<\/thinking>$/i.test(l)) { inThinking = false; continue; }
+        if (inThinking) { events.push({ type: 'thinking', content: l }); continue; }
+
+        // Tool call: "▶ tool_name" or "[tool_use: tool_name]" or "Tool: name"
+        if (/^▶\s+\w/.test(l) || /^\[tool_use:\s*\w/.test(l) || /^Tool:\s+\w/i.test(l)) {
+          flushOutput();
+          const nameMatch = l.match(/(?:▶\s+|tool_use:\s*|Tool:\s+)(\S+)/i);
+          currentTool = nameMatch ? nameMatch[1] : 'tool';
+          const args = l.replace(/^(?:▶\s+|.*?tool_use:\s*|Tool:\s+)\S+\s*/, '');
+          events.push({ type: 'tool.start', name: currentTool, args: args.slice(0, 120) });
+          continue;
+        }
+
+        // Tool end: "✓ done" / "✗ error" / "→ result:" / "Result:"
+        if (/^[✓✗]\s/.test(l) || /^→\s*(result|done|error)/i.test(l)) {
+          flushOutput();
+          const ok = /^✓/.test(l) || /done/i.test(l);
+          events.push({ type: 'tool.end', name: currentTool || 'tool', durationMs: null, ok });
+          currentTool = null;
+          continue;
+        }
+
+        // Tool output: indented or piped while currentTool active
+        if (currentTool && (line.startsWith('  ') || line.startsWith('\t') || l.startsWith('│'))) {
+          toolOutputLines.push(l.replace(/^│\s?/, ''));
+          continue;
+        }
+
+        if (currentTool) { flushOutput(); currentTool = null; }
+
+        // Diff hunk
+        if (/^[+-]{3}\s/.test(l) || /^@@.*@@/.test(l)) {
+          events.push({ type: 'diff.block', filename: l, before: '', after: l });
+          continue;
+        }
+
+        events.push({ type: 'response', content: l });
+      }
+      flushOutput();
+      return events;
+    },
+  },
+};
+
+function parseAgentStream(lines, harnessId) {
+  const parser = HARNESS_PARSERS[harnessId];
+  if (parser) return parser.parse(lines);
+  return lines.filter(l => l.trim()).map(l => ({ type: 'response', content: l.trim() }));
+}
+
+function appendEventsToAgentView(events, agentViewEl) {
+  for (const evt of events) {
+    switch (evt.type) {
+      case 'tool.start': {
+        const card = document.createElement('details');
+        card.className = 'av-tool-card';
+        card.open = true;
+        card.dataset.toolName = evt.name;
+        const summary = document.createElement('summary');
+        summary.className = 'av-tool-summary';
+        summary.innerHTML =
+          `<span class="av-tool-badge">${safeHTML(evt.name)}</span>` +
+          (evt.args ? `<span class="av-tool-args">${safeHTML(evt.args.slice(0, 100))}</span>` : '');
+        card.appendChild(summary);
+        const out = document.createElement('div');
+        out.className = 'av-tool-output';
+        card.appendChild(out);
+        card.dataset.openTool = '1';
+        agentViewEl.appendChild(card);
+        break;
+      }
+      case 'tool.output': {
+        const card = agentViewEl.querySelector('.av-tool-card[data-open-tool]');
+        if (card) {
+          const out = card.querySelector('.av-tool-output');
+          if (out) {
+            const pre = document.createElement('pre');
+            pre.className = 'av-code';
+            pre.textContent = evt.content;
+            out.appendChild(pre);
+          }
+        }
+        break;
+      }
+      case 'tool.end': {
+        const card = agentViewEl.querySelector('.av-tool-card[data-open-tool]');
+        if (card) {
+          const summary = card.querySelector('summary');
+          const badge = document.createElement('span');
+          badge.className = `av-dur-badge ${evt.ok ? 'ok' : 'fail'}`;
+          badge.textContent = `${evt.ok ? '✓' : '✗'}${evt.durationMs !== null && evt.durationMs !== undefined ? ' ' + (evt.durationMs / 1000).toFixed(1) + 's' : ''}`;
+          if (summary) summary.appendChild(badge);
+          card.open = false;
+          delete card.dataset.openTool;
+        }
+        break;
+      }
+      case 'thinking': {
+        const bq = document.createElement('details');
+        bq.className = 'av-thinking-block';
+        const sum = document.createElement('summary');
+        sum.textContent = '💭 Thinking';
+        bq.appendChild(sum);
+        const p = document.createElement('p');
+        p.className = 'av-thinking-text';
+        p.textContent = evt.content;
+        bq.appendChild(p);
+        agentViewEl.appendChild(bq);
+        break;
+      }
+      case 'response': {
+        const last = agentViewEl.lastElementChild;
+        if (last && last.classList.contains('av-response')) {
+          last.textContent += '\n' + evt.content;
+        } else {
+          const p = document.createElement('p');
+          p.className = 'av-response';
+          p.textContent = evt.content;
+          agentViewEl.appendChild(p);
+        }
+        break;
+      }
+      case 'diff.block': {
+        const d = document.createElement('div');
+        d.className = 'av-diff-block';
+        d.innerHTML = `<div class="av-diff-filename">${safeHTML(evt.filename)}</div>` +
+          `<pre class="av-diff-content">${safeHTML(evt.after || evt.before || '')}</pre>`;
+        agentViewEl.appendChild(d);
+        break;
+      }
+      case 'header': {
+        const h = document.createElement('div');
+        h.className = 'av-header';
+        h.innerHTML = [
+          evt.ticketId ? `<span>🎫 ${safeHTML(evt.ticketId)}</span>` : '',
+          evt.role     ? `<span>👤 ${safeHTML(evt.role)}</span>` : '',
+          evt.model    ? `<span>🤖 ${safeHTML(evt.model)}</span>` : '',
+        ].filter(Boolean).join(' · ');
+        agentViewEl.insertBefore(h, agentViewEl.firstChild);
+        break;
+      }
+      case 'system': {
+        const d = document.createElement('div');
+        d.className = 'av-system';
+        d.textContent = evt.content;
+        agentViewEl.appendChild(d);
+        break;
+      }
+    }
+  }
+}
+
+function createTuningCallout(harness, meta) {
+  const div = document.createElement('div');
+  div.className = 'av-tuning-callout';
+  div.innerHTML = `<strong>Parser not tuned for "${safeHTML(harness)}".</strong> Output is shown as raw text below. <button class="av-tuning-btn">Create tuning ticket</button>`;
+  div.querySelector('.av-tuning-btn').addEventListener('click', async () => {
+    try {
+      const r = await fetch('/api/ticket/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: `Tune structured view parser for ${harness}`,
+          description: `## Goal\nCapture 10+ sample runs from the "${harness}" harness, extract output patterns, and update HARNESS_PARSERS in dashboard/app.js.\n\n## Steps\n1. Run the harness on at least 10 varied tickets\n2. Capture raw PTY output (copy from terminal view)\n3. Identify tool.start, tool.end, thinking, response line patterns\n4. Add regex patterns to HARNESS_PARSERS['${harness}'] in dashboard/app.js\n5. Test with real run samples until all event types render correctly`,
+          phase: 'P8', workstream: 'WS-UX', priority: 'P3', role: 'engineering', repo: 'zo-agentic-framework',
+        }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        alert(`Created tuning ticket: ${data.ticketId}`);
+      } else {
+        alert('Failed to create ticket: HTTP ' + r.status);
+      }
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
+  });
+  return div;
+}
+
+async function initAgentView(processId, agentViewEl) {
+  const entry = STATE.processes.get(processId);
+  if (!entry) return;
+  const harness = entry.meta?.harness || 'mock';
+  const sidecarUrl = window._zafSidecarUrl || 'http://localhost:4242';
+  const t0 = performance.now();
+
+  agentViewEl.innerHTML = '<div class="av-loading">Parsing stream…</div>';
+
+  let textBuf = STATE.agentTextBuffers.get(processId) || '';
+
+  // For completed processes, load full sidecar buffer if not already cached
+  if (!isLiveProcess(entry.meta) && !textBuf) {
+    try {
+      const r = await fetch(`${sidecarUrl}/api/process/buffer?id=${encodeURIComponent(processId)}`);
+      const { buffer } = await r.json();
+      if (Array.isArray(buffer)) {
+        let raw = '';
+        for (const chunk of buffer) {
+          if (!chunk.data) continue;
+          try {
+            const bin = atob(chunk.data);
+            const arr = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+            raw += new TextDecoder('utf-8', { fatal: false }).decode(arr);
+          } catch {}
+        }
+        textBuf = stripAnsi(raw);
+        STATE.agentTextBuffers.set(processId, textBuf);
+      }
+    } catch {}
+  }
+
+  const lines = textBuf.split('\n').filter(l => l.trim());
+  agentViewEl.innerHTML = '';
+
+  const parser = HARNESS_PARSERS[harness];
+  if (!parser || parser.isStub) {
+    agentViewEl.appendChild(createTuningCallout(harness, entry.meta));
+  }
+
+  const events = parseAgentStream(lines, harness);
+  appendEventsToAgentView(events, agentViewEl);
+  STATE.agentLineCursors.set(processId, textBuf.split('\n').length);
+
+  if (!agentViewEl.children.length) {
+    agentViewEl.innerHTML = '<div class="av-empty">No structured events detected yet. Run an agent to populate this view.</div>';
+  }
+
+  const elapsed = (performance.now() - t0).toFixed(0);
+  const note = document.createElement('div');
+  note.className = 'av-render-note';
+  note.textContent = `Rendered ${events.length} events from ${lines.length} lines in ${elapsed}ms`;
+  agentViewEl.appendChild(note);
+}
+
+function feedAgentViewLive(processId) {
+  if (!STATE.agentViewActive.get(processId)) return;
+  const agentViewEl = document.getElementById(`agent-view-${processId}`);
+  if (!agentViewEl) return;
+  const harness = STATE.processes.get(processId)?.meta?.harness || 'mock';
+  const buf = STATE.agentTextBuffers.get(processId) || '';
+  const cursor = STATE.agentLineCursors.get(processId) || 0;
+
+  const allLines = buf.split('\n');
+  const complete = buf.endsWith('\n') ? allLines : allLines.slice(0, -1);
+  if (complete.length <= cursor) return;
+
+  const newLines = complete.slice(cursor).filter(l => l.trim());
+  STATE.agentLineCursors.set(processId, complete.length);
+
+  // Remove loading/empty placeholder on first real content
+  const placeholder = agentViewEl.querySelector('.av-loading, .av-empty');
+  if (placeholder && newLines.length) placeholder.remove();
+
+  const events = parseAgentStream(newLines, harness);
+  appendEventsToAgentView(events, agentViewEl);
+}
+
+// =========================================================================
 // VIEW: AUDIT LOG
 // =========================================================================
 
@@ -2448,6 +3009,209 @@ function renderAudit(container) {
 }
 
 // =========================================================================
+// VIEW: CODEBASE MAP (TKT-ZAF-0025 — static analysis + file import graph)
+// =========================================================================
+
+let _cbCtx = null; // cached context for current repo
+
+async function renderCodebaseMap(container) {
+  const repo = STATE.filters.repo || (STATE.data?.repos?.[0]?.id) || 'zo-agentic-framework';
+  container.innerHTML = `
+    <div class="view-graph fade-in" style="display:flex;flex-direction:column;height:100%;gap:0;">
+      <div class="graph-toolbar" style="flex-shrink:0;">
+        <span style="font-size:15px;font-weight:700;color:var(--text-primary)">⊛ Codebase Map</span>
+        <span style="font-size:11px;color:var(--text-muted)" id="cb-repo-label">repo: ${repo}</span>
+        <span style="font-size:11px;color:var(--text-muted)" id="cb-stats">Loading…</span>
+        <button class="btn btn-secondary" id="cb-refresh">↺ Re-scan</button>
+        <button class="btn" id="cb-generate-md">Generate CODEBASE.md</button>
+      </div>
+      <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
+        <div class="graph-canvas-wrap" id="cb-wrap" style="flex:1;position:relative;">
+          <svg id="cb-svg" width="100%" height="100%">
+            <defs>
+              <marker id="cb-arrow" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                <polygon points="0 0, 6 2.5, 0 5" fill="rgba(99,102,241,0.6)"/>
+              </marker>
+            </defs>
+            <g id="cb-root"></g>
+          </svg>
+          <div id="cb-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,11,20,0.7);font-size:13px;color:var(--text-secondary)">Scanning…</div>
+        </div>
+        <div id="cb-inspector" style="width:260px;flex-shrink:0;background:var(--bg-card);border-left:1px solid var(--border-subtle);padding:14px;overflow-y:auto;font-size:12px;">
+          <div style="color:var(--text-muted);font-style:italic;">Click a file node to inspect symbols.</div>
+        </div>
+      </div>
+    </div>`;
+
+  const loadCtx = async () => {
+    document.getElementById('cb-loading').style.display = 'flex';
+    try {
+      const r = await fetch(`/api/repo/context?repo=${encodeURIComponent(repo)}`);
+      _cbCtx = await r.json();
+      document.getElementById('cb-stats').textContent = `${_cbCtx.fileCount} files · ${_cbCtx.graph.nodes.length} nodes · ${_cbCtx.graph.edges.length} import edges · ${_cbCtx.ms}ms`;
+      document.getElementById('cb-generate-md').textContent = _cbCtx.codebaseMdExists ? '↺ Regenerate CODEBASE.md' : 'Generate CODEBASE.md';
+      drawCodebaseGraph(_cbCtx.graph.nodes, _cbCtx.graph.edges);
+    } catch (e) {
+      document.getElementById('cb-stats').textContent = 'Error: ' + e.message;
+    }
+    document.getElementById('cb-loading').style.display = 'none';
+  };
+
+  container.querySelector('#cb-refresh').addEventListener('click', loadCtx);
+  container.querySelector('#cb-generate-md').addEventListener('click', async () => {
+    const btn = container.querySelector('#cb-generate-md');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      const r = await fetch('/api/repo/codebase-md', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      btn.textContent = '✓ CODEBASE.md written';
+      if (_cbCtx) _cbCtx.codebaseMdExists = true;
+      setTimeout(() => { btn.disabled = false; btn.textContent = '↺ Regenerate CODEBASE.md'; }, 2500);
+    } catch (e) {
+      btn.textContent = 'Error: ' + e.message;
+      btn.disabled = false;
+    }
+  });
+
+  loadCtx();
+}
+
+function drawCodebaseGraph(nodes, edges) {
+  const svgEl = document.getElementById('cb-svg');
+  const root  = document.getElementById('cb-root');
+  if (!svgEl || !root) return;
+  if (!nodes.length) { root.innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="#525970" dominant-baseline="middle">No source files found</text>`; return; }
+
+  const W = svgEl.clientWidth || 800;
+  const H = svgEl.clientHeight || 500;
+  const NW = 110, NH = 26, MARGIN = 50;
+
+  // Color by top-level directory
+  const dirs = [...new Set(nodes.map(n => n.dir))];
+  const DIR_COLORS = ['#6366f1','#f472b6','#34d399','#f59e0b','#60a5fa','#fb923c','#a78bfa','#2dd4bf'];
+  const dirColor = {};
+  dirs.forEach((d, i) => { dirColor[d] = DIR_COLORS[i % DIR_COLORS.length]; });
+
+  // Simple force layout (reuse pattern from drawDraggableGraph)
+  const pos = {};
+  nodes.forEach((n, i) => {
+    const cols = Math.ceil(Math.sqrt(nodes.length * 1.5));
+    const row = Math.floor(i / cols), col = i % cols;
+    pos[n.id] = { x: MARGIN + col * (NW + 30) + (row % 2 ? 0 : (NW + 30) / 2), y: MARGIN + row * (NH + 40) };
+  });
+  const vel = {};
+  nodes.forEach(n => vel[n.id] = { x: 0, y: 0 });
+  const nodeIds = new Set(nodes.map(n => n.id));
+  const validEdges = edges.filter(e => nodeIds.has(e.from) && nodeIds.has(e.to));
+  for (let it = 0; it < 60; it++) {
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      const dx = pos[b.id].x - pos[a.id].x, dy = pos[b.id].y - pos[a.id].y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = 2500 / (d * d);
+      vel[a.id].x -= dx / d * f; vel[a.id].y -= dy / d * f;
+      vel[b.id].x += dx / d * f; vel[b.id].y += dy / d * f;
+    }
+    for (const e of validEdges) {
+      if (!pos[e.from] || !pos[e.to]) continue;
+      const dx = pos[e.to].x - pos[e.from].x, dy = pos[e.to].y - pos[e.from].y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = (d - 160) * 0.04;
+      vel[e.from].x += dx / d * f; vel[e.from].y += dy / d * f;
+      vel[e.to].x   -= dx / d * f; vel[e.to].y   -= dy / d * f;
+    }
+    for (const n of nodes) { vel[n.id].x *= 0.8; vel[n.id].y *= 0.8; pos[n.id].x += vel[n.id].x; pos[n.id].y += vel[n.id].y; }
+  }
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of nodes) { minX = Math.min(minX, pos[n.id].x); minY = Math.min(minY, pos[n.id].y); maxX = Math.max(maxX, pos[n.id].x + NW); maxY = Math.max(maxY, pos[n.id].y + NH); }
+  const pad = 40;
+  const scale = Math.min((W - pad * 2) / ((maxX - minX) || 1), (H - pad * 2) / ((maxY - minY) || 1), 1.4);
+  for (const n of nodes) { pos[n.id].x = pad + (pos[n.id].x - minX) * scale; pos[n.id].y = pad + (pos[n.id].y - minY) * scale; }
+
+  let panX = 0, panY = 0, zoom = 1, isPanning = false, panSX = 0, panSY = 0;
+  function apply() { root.setAttribute('transform', `translate(${panX},${panY}) scale(${zoom})`); }
+
+  const edgesHtml = validEdges.map(e => {
+    const a = pos[e.from], b = pos[e.to];
+    const x1 = a.x + NW / 2, y1 = a.y + NH, x2 = b.x + NW / 2, y2 = b.y, my = (y1 + y2) / 2;
+    return `<path data-from="${e.from}" data-to="${e.to}" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}" stroke="rgba(99,102,241,0.35)" stroke-width="1" fill="none" marker-end="url(#cb-arrow)"/>`;
+  }).join('');
+
+  const nodesHtml = nodes.map(n => {
+    const p = pos[n.id], c = dirColor[n.dir] || '#6366f1';
+    const lbl = n.label.length > 16 ? n.label.slice(0, 14) + '…' : n.label;
+    const sz = Math.max(1, Math.min(6, n.size / 1000));
+    return `<g class="cb-node" data-id="${n.id}" transform="translate(${p.x},${p.y})" style="cursor:pointer;">
+      <rect width="${NW}" height="${NH}" rx="4" fill="${c}18" stroke="${c}" stroke-width="${0.8 + sz * 0.3}"/>
+      <text x="6" y="17" font-size="10" fill="${c}" font-family="JetBrains Mono,monospace">${safeHTML(lbl)}</text>
+    </g>`;
+  }).join('');
+
+  root.innerHTML = edgesHtml + nodesHtml;
+  apply();
+
+  // Node click → inspector
+  root.querySelectorAll('.cb-node').forEach(el => {
+    const id = el.dataset.id;
+    let dragging = false, sx = 0, sy = 0, sPX = 0, sPY = 0;
+    el.addEventListener('mousedown', e => {
+      e.stopPropagation(); dragging = false;
+      sx = e.clientX; sy = e.clientY; sPX = pos[id].x; sPY = pos[id].y;
+      function mm(ev) {
+        if (Math.abs(ev.clientX - sx) > 3 || Math.abs(ev.clientY - sy) > 3) dragging = true;
+        pos[id].x = sPX + (ev.clientX - sx) / zoom; pos[id].y = sPY + (ev.clientY - sy) / zoom;
+        el.setAttribute('transform', `translate(${pos[id].x},${pos[id].y})`);
+        root.querySelectorAll(`path[data-from="${id}"],path[data-to="${id}"]`).forEach(p => {
+          const ef = p.dataset.from, et = p.dataset.to;
+          if (pos[ef] && pos[et]) {
+            const a = pos[ef], b = pos[et], x1 = a.x + NW / 2, y1 = a.y + NH, x2 = b.x + NW / 2, y2 = b.y, my = (y1 + y2) / 2;
+            p.setAttribute('d', `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
+          }
+        });
+      }
+      function mu(ev) { window.removeEventListener('mousemove', mm); window.removeEventListener('mouseup', mu); if (!dragging) showCbInspector(id); }
+      window.addEventListener('mousemove', mm); window.addEventListener('mouseup', mu);
+    });
+  });
+
+  svgEl.addEventListener('mousedown', e => { if (e.target.closest('.cb-node')) return; isPanning = true; panSX = e.clientX - panX; panSY = e.clientY - panY; svgEl.style.cursor = 'grabbing'; });
+  window.addEventListener('mousemove', e => { if (!isPanning) return; panX = e.clientX - panSX; panY = e.clientY - panSY; apply(); });
+  window.addEventListener('mouseup', () => { isPanning = false; svgEl.style.cursor = 'grab'; });
+  svgEl.addEventListener('wheel', e => { e.preventDefault(); zoom = Math.max(0.2, Math.min(4, zoom + e.deltaY * -0.001)); apply(); }, { passive: false });
+}
+
+function showCbInspector(fileId) {
+  const inspector = document.getElementById('cb-inspector');
+  if (!inspector || !_cbCtx) return;
+  const node = _cbCtx.graph.nodes.find(n => n.id === fileId);
+  if (!node) return;
+  const imports = _cbCtx.graph.edges.filter(e => e.from === fileId).map(e => e.to);
+  const importedBy = _cbCtx.graph.edges.filter(e => e.to === fileId).map(e => e.from);
+  inspector.innerHTML = `
+    <div style="font-weight:700;color:var(--text-primary);margin-bottom:8px;word-break:break-all;">${safeHTML(node.id)}</div>
+    <div style="color:var(--text-muted);margin-bottom:10px;">${(node.size/1024).toFixed(1)} KB · ${node.dir}/</div>
+    ${node.symbols.length ? `<div style="margin-bottom:8px;">
+      <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Exports / Symbols</div>
+      ${node.symbols.map(s => `<div style="font-family:JetBrains Mono,monospace;font-size:11px;color:var(--indigo-400);padding:1px 0;">${safeHTML(s)}()</div>`).join('')}
+    </div>` : ''}
+    ${imports.length ? `<div style="margin-bottom:8px;">
+      <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Imports (${imports.length})</div>
+      ${imports.slice(0, 6).map(f => `<div style="font-size:10px;color:var(--text-secondary);word-break:break-all;">→ ${safeHTML(f)}</div>`).join('')}${imports.length > 6 ? `<div style="font-size:10px;color:var(--text-muted);">…+${imports.length - 6} more</div>` : ''}
+    </div>` : ''}
+    ${importedBy.length ? `<div>
+      <div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Imported by (${importedBy.length})</div>
+      ${importedBy.slice(0, 4).map(f => `<div style="font-size:10px;color:var(--text-secondary);word-break:break-all;">← ${safeHTML(f)}</div>`).join('')}${importedBy.length > 4 ? `<div style="font-size:10px;color:var(--text-muted);">…+${importedBy.length - 4} more</div>` : ''}
+    </div>` : ''}
+    ${!node.symbols.length && !imports.length && !importedBy.length ? '<div style="color:var(--text-muted);font-style:italic;">No symbols or imports detected.</div>' : ''}`;
+}
+
+// =========================================================================
 // VIEW: CONTROL CENTER (Ticket Builder + Agent Editor + Usage)
 // =========================================================================
 
@@ -2460,18 +3224,22 @@ function renderControl(container) {
 
   const tab = STATE.controlTab || 'ticket';
   const tabs = [
-    { id:'ticket',  label:'Ticket Builder',    icon:'TKT' },
-    { id:'agents',  label:'Agent Editor',      icon:'AGT' },
-    { id:'usage',   label:'Telemetry & Usage', icon:'USE' },
-    { id:'cli-hub', label:'CLI Hub',           icon:'CLI' },
+    { id:'ticket',      label:'Ticket Builder',    icon:'TKT' },
+    { id:'agents',      label:'Agent Editor',      icon:'AGT' },
+    { id:'marketplace', label:'Marketplace',       icon:'MKT' },
+    { id:'skills',      label:'Skill Library',     icon:'SKL' },
+    { id:'usage',       label:'Telemetry & Usage', icon:'USE' },
+    { id:'cli-hub',     label:'CLI Hub',           icon:'CLI' },
   ];
   const tabsHtml = tabs.map(t => `<button class="zaf-control-tab ${tab===t.id?'active':''}" data-tab="${t.id}"><span>${t.icon}</span> ${t.label}</button>`).join('');
 
   let body = '';
-  if (tab === 'ticket')      body = renderControlTicketBuilder();
-  else if (tab === 'agents') body = renderControlAgentEditor();
-  else if (tab === 'usage')  body = renderControlUsage();
-  else if (tab === 'cli-hub') body = renderControlCliHub();
+  if (tab === 'ticket')           body = renderControlTicketBuilder();
+  else if (tab === 'agents')      body = renderControlAgentEditor();
+  else if (tab === 'marketplace') body = renderControlMarketplace();
+  else if (tab === 'skills')      body = renderControlSkills();
+  else if (tab === 'usage')       body = renderControlUsage();
+  else if (tab === 'cli-hub')     body = renderControlCliHub();
 
   container.innerHTML = `
     <div class="zaf-control-wrap fade-in">
@@ -2486,9 +3254,11 @@ function renderControl(container) {
     </div>`;
   container.querySelectorAll('.zaf-control-tab').forEach(b => b.addEventListener('click', () => { STATE.controlTab = b.dataset.tab; renderControl(container); }));
 
-  if (tab === 'ticket')  wireTicketBuilder(container);
-  if (tab === 'agents')  wireAgentEditor(container);
-  if (tab === 'cli-hub') wireCliHub(container);
+  if (tab === 'ticket')      wireTicketBuilder(container);
+  if (tab === 'agents')      wireAgentEditor(container);
+  if (tab === 'marketplace') wireMarketplace(container);
+  if (tab === 'skills')      wireSkillLibrary(container);
+  if (tab === 'cli-hub')     wireCliHub(container);
 }
 
 // ---- Ticket builder ----
@@ -2868,6 +3638,381 @@ ${p.bounds}`;
 async function persistConfig() {
   const r = await fetch('/api/config/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(STATE.config) });
   if (!r.ok) alert('Config save failed: HTTP ' + r.status);
+}
+
+// ---- Marketplace ----
+function renderControlMarketplace() {
+  const agents = STATE.config.agents || {};
+  const imported = Object.entries(agents).filter(([,a]) => a.source);
+  const local    = Object.entries(agents).filter(([,a]) => !a.source);
+  const packs    = STATE.config.importedPacks || [];
+
+  const agentCard = ([key, a], showDupe = true) => `
+    <div class="mkt-agent-card" data-key="${safeHTML(key)}">
+      <div class="mkt-agent-header">
+        <span class="mkt-agent-name">${safeHTML(a.roleName || key)}</span>
+        <span class="mkt-agent-key">${safeHTML(key)}</span>
+        ${a.source ? `<span class="mkt-badge-imported" title="${safeHTML(a.source)}">imported</span>` : '<span class="mkt-badge-local">local</span>'}
+      </div>
+      <div class="mkt-agent-meta">
+        <span>${safeHTML(a.harness || '—')}</span>
+        <span>${safeHTML(a.structuralRole || 'worker')}</span>
+        <span>${safeHTML(a.modelId || '—')}</span>
+      </div>
+      ${a.personality ? `<div class="mkt-agent-excerpt">${safeHTML(a.personality.slice(0, 120))}${a.personality.length > 120 ? '…' : ''}</div>` : ''}
+      <div class="mkt-agent-actions">
+        ${showDupe ? `<button class="console-btn mkt-dupe-btn" data-key="${safeHTML(key)}">Duplicate to local</button>` : ''}
+      </div>
+    </div>`;
+
+  const packRows = packs.map((p, idx) => `
+    <div class="mkt-pack-row">
+      <span class="mkt-pack-source" title="${safeHTML(p.source)}">${safeHTML(p.source)}</span>
+      <span class="mkt-pack-count">${p.count} agent${p.count !== 1 ? 's' : ''}</span>
+      <span class="mkt-pack-date">${p.importedAt ? new Date(p.importedAt).toLocaleDateString() : ''}</span>
+      <button class="console-btn mkt-check-updates-btn" data-source="${safeHTML(p.source)}" data-idx="${idx}">Check for updates</button>
+    </div>
+    <div class="mkt-update-diff" id="mkt-update-diff-${idx}" style="display:none;margin:4px 0 12px;"></div>`).join('');
+
+  return `
+    <div class="zaf-control-card" style="max-width:900px">
+      <h2>Agent Marketplace</h2>
+      <p style="color:var(--text-secondary);margin-bottom:20px;font-size:13px">Import agent packs from a git URL. Supports Format A (.md frontmatter) and Format B (agents.json).</p>
+
+      <div class="mkt-import-row">
+        <input id="mkt-url" type="text" placeholder="https://github.com/user/repo" style="flex:1;min-width:0" />
+        <input id="mkt-subdir" type="text" placeholder="subdir (optional)" style="width:160px" />
+        <button class="zaf-btn" id="mkt-preview-btn">Preview Pack</button>
+      </div>
+      <div id="mkt-preview-area" style="margin-top:16px"></div>
+
+      ${packs.length ? `<div style="margin-top:28px"><div class="zaf-field-label" style="margin-bottom:8px">Imported Packs</div>${packRows}</div>` : ''}
+
+      <div style="margin-top:28px">
+        <div class="zaf-field-label" style="margin-bottom:10px">Imported Agents (${imported.length})</div>
+        ${imported.length ? `<div class="mkt-agent-grid">${imported.map(e => agentCard(e, true)).join('')}</div>` : '<div style="color:var(--text-muted);font-size:12px">No imported agents yet.</div>'}
+      </div>
+
+      <div style="margin-top:28px">
+        <div class="zaf-field-label" style="margin-bottom:10px">Local Agents (${local.length})</div>
+        <div class="mkt-agent-grid">${local.map(e => agentCard(e, false)).join('')}</div>
+      </div>
+    </div>`;
+}
+
+function wireMarketplace(container) {
+  const previewBtn = container.querySelector('#mkt-preview-btn');
+  if (!previewBtn) return;
+  const urlInput  = container.querySelector('#mkt-url');
+  const subdirInp = container.querySelector('#mkt-subdir');
+  const previewArea = container.querySelector('#mkt-preview-area');
+
+  previewBtn.addEventListener('click', async () => {
+    const url = urlInput.value.trim();
+    if (!url) return alert('Enter a git URL first');
+    previewBtn.disabled = true;
+    previewBtn.textContent = 'Cloning…';
+    previewArea.innerHTML = `<div style="color:var(--text-muted);font-size:12px">Cloning and scanning — this may take a few seconds…</div>`;
+    try {
+      const r = await fetch('/api/marketplace/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, subdir: subdirInp.value.trim() || undefined }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Preview failed');
+      if (!data.agents.length) {
+        previewArea.innerHTML = `<div style="color:var(--text-secondary);font-size:12px">No agents found. Check URL and subdir, or confirm the pack uses .md frontmatter or agents.json format.</div>`;
+        return;
+      }
+      let html = `<div style="margin-bottom:10px;color:var(--text-secondary);font-size:12px">Found <strong style="color:var(--text-primary)">${data.agents.length}</strong> agent${data.agents.length !== 1 ? 's' : ''} in pack.</div>`;
+      html += `<div class="mkt-agent-grid" id="mkt-preview-grid">`;
+      for (const a of data.agents) {
+        html += `<div class="mkt-agent-card mkt-preview-card" data-key="">
+          <label class="mkt-check-label">
+            <input type="checkbox" class="mkt-sel-cb" checked />
+            <span class="mkt-agent-name">${safeHTML(a.roleName || '—')}</span>
+          </label>
+          <div class="mkt-agent-meta">
+            <span>${safeHTML(a.harness || '—')}</span>
+            <span>${safeHTML(a.structuralRole || 'worker')}</span>
+            <span>${safeHTML(a.modelId || '—')}</span>
+          </div>
+          ${a.personality ? `<div class="mkt-agent-excerpt">${safeHTML(a.personality.slice(0, 100))}${a.personality.length > 100 ? '…' : ''}</div>` : ''}
+        </div>`;
+      }
+      html += `</div>`;
+      html += `<div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="zaf-btn" id="mkt-import-btn">Import selected</button>
+        <span id="mkt-import-status" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>`;
+      previewArea.innerHTML = html;
+
+      const importBtn = previewArea.querySelector('#mkt-import-btn');
+      importBtn.addEventListener('click', async () => {
+        const checkboxes = previewArea.querySelectorAll('.mkt-sel-cb');
+        const selected = data.agents.filter((_, i) => checkboxes[i]?.checked);
+        if (!selected.length) return alert('Select at least one agent to import');
+        importBtn.disabled = true;
+        const statusEl = previewArea.querySelector('#mkt-import-status');
+        statusEl.textContent = 'Importing…';
+        try {
+          const ir = await fetch('/api/marketplace/import', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agents: selected, source: url }),
+          });
+          const id = await ir.json();
+          if (!ir.ok) throw new Error(id.error || 'Import failed');
+          STATE.config = null; // force refresh
+          statusEl.textContent = `✓ Imported ${id.imported} agent${id.imported !== 1 ? 's' : ''}`;
+          setTimeout(() => { STATE.controlTab = 'marketplace'; renderControl(container); }, 900);
+        } catch (e) {
+          statusEl.textContent = `Error: ${e.message}`;
+          importBtn.disabled = false;
+        }
+      });
+    } catch (e) {
+      previewArea.innerHTML = `<div style="color:var(--status-blocked);font-size:12px">Error: ${safeHTML(e.message)}</div>`;
+    } finally {
+      previewBtn.disabled = false;
+      previewBtn.textContent = 'Preview Pack';
+    }
+  });
+
+  // Check for updates buttons (TKT-ZAF-0037)
+  container.querySelectorAll('.mkt-check-updates-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const source = btn.dataset.source;
+      const idx    = btn.dataset.idx;
+      const diffEl = container.querySelector(`#mkt-update-diff-${idx}`);
+      if (!diffEl) return;
+      if (diffEl.style.display !== 'none') { diffEl.style.display = 'none'; return; }
+      btn.disabled = true;
+      btn.textContent = 'Fetching…';
+      diffEl.style.display = 'block';
+      diffEl.innerHTML = `<div style="color:var(--text-muted);font-size:12px">Cloning and comparing — may take a few seconds…</div>`;
+      try {
+        const r = await fetch('/api/marketplace/check-updates', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Check failed');
+        const { added, changed, removed } = d;
+        if (!added.length && !changed.length && !removed.length) {
+          diffEl.innerHTML = `<div style="color:var(--status-done,#10b981);font-size:12px">✓ Pack is up to date — no changes detected.</div>`;
+          return;
+        }
+        let html = `<div style="font-size:12px;margin-bottom:10px;color:var(--text-secondary)">Diff: <strong style="color:var(--text-primary)">${added.length} new</strong> · <strong style="color:#fbbf24">${changed.length} changed</strong> · <strong style="color:var(--text-muted)">${removed.length} removed (info only)</strong></div>`;
+        const items = [
+          ...added.map(({ key, agent }) => ({ key, agent, type: 'new' })),
+          ...changed.map(({ key, incoming }) => ({ key, agent: incoming, type: 'changed' })),
+        ];
+        if (items.length) {
+          html += `<div class="mkt-agent-grid" id="mkt-diff-grid-${idx}">`;
+          for (const { key, agent, type } of items) {
+            html += `<div class="mkt-agent-card">
+              <div class="mkt-agent-header">
+                <label class="mkt-check-label"><input type="checkbox" class="mkt-upd-cb" data-key="${safeHTML(key)}" checked />
+                <span class="mkt-agent-name">${safeHTML(agent.roleName || key)}</span></label>
+                <span class="${type === 'new' ? 'mkt-badge-local' : 'mkt-badge-imported'}" style="margin-left:auto">${type}</span>
+              </div>
+              <div class="mkt-agent-meta"><span>${safeHTML(agent.harness||'—')}</span><span>${safeHTML(agent.structuralRole||'worker')}</span></div>
+            </div>`;
+          }
+          html += `</div>`;
+          html += `<div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <button class="zaf-btn mkt-apply-updates-btn" data-source="${safeHTML(source)}" data-idx="${idx}">Apply selected</button>
+            <span class="mkt-apply-status" style="font-size:12px;color:var(--text-muted)"></span>
+          </div>`;
+        }
+        if (removed.length) {
+          html += `<div style="margin-top:8px;font-size:11px;color:var(--text-muted)">${removed.map(({ key }) => `${safeHTML(key)} removed from pack`).join(' · ')}</div>`;
+        }
+        diffEl.innerHTML = html;
+
+        // Wire apply
+        const applyBtn = diffEl.querySelector('.mkt-apply-updates-btn');
+        if (applyBtn) {
+          applyBtn.addEventListener('click', async () => {
+            const checks = diffEl.querySelectorAll('.mkt-upd-cb:checked');
+            const updates = items.filter((_, i) => checks[i]?.checked);
+            if (!updates.length) return alert('Select at least one update to apply');
+            applyBtn.disabled = true;
+            const statusEl = diffEl.querySelector('.mkt-apply-status');
+            statusEl.textContent = 'Applying…';
+            try {
+              const ar = await fetch('/api/marketplace/apply-updates', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source, updates: updates.map(({ key, agent }) => ({ key, agent })) }),
+              });
+              const ad = await ar.json();
+              if (!ar.ok) throw new Error(ad.error || 'Apply failed');
+              STATE.config = null;
+              statusEl.textContent = `✓ Applied ${ad.applied} update${ad.applied !== 1 ? 's' : ''}`;
+              setTimeout(() => { STATE.controlTab = 'marketplace'; renderControl(container); }, 800);
+            } catch (e) {
+              statusEl.textContent = 'Error: ' + e.message;
+              applyBtn.disabled = false;
+            }
+          });
+        }
+      } catch (e) {
+        diffEl.innerHTML = `<div style="color:var(--status-blocked);font-size:12px">Error: ${safeHTML(e.message)}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Check for updates';
+      }
+    });
+  });
+
+  // Duplicate buttons
+  container.querySelectorAll('.mkt-dupe-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.key;
+      btn.disabled = true;
+      btn.textContent = 'Duplicating…';
+      try {
+        const r = await fetch('/api/agents/duplicate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Duplicate failed');
+        STATE.config = null;
+        setTimeout(() => { STATE.controlTab = 'marketplace'; renderControl(container); }, 400);
+      } catch (e) {
+        alert('Duplicate failed: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Duplicate to local';
+      }
+    });
+  });
+}
+
+// ---- Skill Library (TKT-ZAF-0038) ----
+function renderControlSkills() {
+  const repos = (STATE.data?.repos || []).map(r => r.id);
+  const selectedRepo = STATE.skillLibRepo || repos[0] || '';
+  const repoSelect = repos.map(r => `<option value="${safeHTML(r)}" ${r===selectedRepo?'selected':''}>${safeHTML(r)}</option>`).join('');
+  return `
+    <div class="zaf-control-card" style="max-width:900px">
+      <h2>Skill Library</h2>
+      <p style="color:var(--text-secondary);margin-bottom:16px;font-size:13px">Saved .zaf-skill.md files for the selected repo. Skills are auto-injected into agent seed prompts (up to 3 most recent).</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:20px">
+        <label style="font-size:12px;color:var(--text-secondary)">Repo:</label>
+        <select id="skill-lib-repo" style="font-size:12px">${repoSelect}</select>
+        <button class="console-btn" id="skill-lib-reload">Reload</button>
+      </div>
+      <div id="skill-lib-list"><div style="color:var(--text-muted);font-size:12px">Loading…</div></div>
+    </div>`;
+}
+
+function wireSkillLibrary(container) {
+  const repoSel  = container.querySelector('#skill-lib-repo');
+  const listEl   = container.querySelector('#skill-lib-list');
+  const reloadBtn = container.querySelector('#skill-lib-reload');
+  if (!repoSel || !listEl) return;
+
+  async function loadSkills() {
+    const repo = repoSel.value;
+    STATE.skillLibRepo = repo;
+    listEl.innerHTML = `<div style="color:var(--text-muted);font-size:12px">Loading…</div>`;
+    try {
+      const r = await fetch(`/api/repo/skills?repo=${encodeURIComponent(repo)}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Load failed');
+      if (!d.skills.length) {
+        listEl.innerHTML = `<div style="color:var(--text-muted);font-size:12px">No .zaf-skill.md files found in ${safeHTML(repo)}/.zaf-skills/. Extract skills from completed agent runs to populate this library.</div>`;
+        return;
+      }
+      let html = `<div class="mkt-agent-grid">`;
+      for (const sk of d.skills) {
+        const toolTags = (sk.tools || []).map(t => `<span class="skill-tool-tag">${safeHTML(t)}</span>`).join('');
+        const sourceBadge = sk.source === 'extracted' ? `<span class="mkt-badge-imported" style="font-size:10px">extracted</span>` : `<span class="mkt-badge-local" style="font-size:10px">manual</span>`;
+        html += `<div class="mkt-agent-card" data-skill-file="${safeHTML(sk.filename)}">
+          <div class="mkt-agent-header">
+            <span class="mkt-agent-name">${safeHTML(sk.name)}</span>
+            ${sourceBadge}
+          </div>
+          ${sk.description ? `<div class="mkt-agent-excerpt">${safeHTML(sk.description)}</div>` : ''}
+          ${toolTags ? `<div class="skill-cand-tools">${toolTags}</div>` : ''}
+          ${sk.extractedFrom ? `<div style="font-size:10px;color:var(--text-muted)">from: ${safeHTML(sk.extractedFrom)}</div>` : ''}
+          ${sk.created ? `<div style="font-size:10px;color:var(--text-muted)">${safeHTML(sk.created)}</div>` : ''}
+          <div class="skill-cand-actions">
+            <button class="console-btn skill-edit-btn" data-file="${safeHTML(sk.filename)}" data-repo="${safeHTML(repo)}">Edit</button>
+            <button class="console-btn" style="color:var(--status-blocked)" data-delete-file="${safeHTML(sk.filename)}" data-delete-repo="${safeHTML(repo)}">Delete</button>
+          </div>
+          <div class="skill-edit-area" id="skill-edit-${safeHTML(sk.filename)}" style="display:none;margin-top:8px">
+            <textarea class="skill-edit-ta" rows="10" style="width:100%;background:var(--bg-input,#1a1a2e);border:1px solid var(--border-color,#2a2a3e);color:var(--text-primary);font-family:monospace;font-size:11px;padding:8px;border-radius:4px;resize:vertical">${safeHTML(sk.body)}</textarea>
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <button class="console-btn skill-save-edit-btn" data-file="${safeHTML(sk.filename)}" data-repo="${safeHTML(repo)}">Save</button>
+              <button class="console-btn skill-cancel-edit-btn" data-file="${safeHTML(sk.filename)}">Cancel</button>
+            </div>
+          </div>
+        </div>`;
+      }
+      html += `</div>`;
+      listEl.innerHTML = html;
+
+      // Edit
+      listEl.querySelectorAll('.skill-edit-btn').forEach(btn => {
+        btn.onclick = () => {
+          const area = listEl.querySelector(`#skill-edit-${btn.dataset.file}`);
+          if (area) area.style.display = area.style.display === 'none' ? 'block' : 'none';
+        };
+      });
+      listEl.querySelectorAll('.skill-cancel-edit-btn').forEach(btn => {
+        btn.onclick = () => {
+          const area = listEl.querySelector(`#skill-edit-${btn.dataset.file}`);
+          if (area) area.style.display = 'none';
+        };
+      });
+      listEl.querySelectorAll('.skill-save-edit-btn').forEach(btn => {
+        btn.onclick = async () => {
+          const area = listEl.querySelector(`#skill-edit-${btn.dataset.file}`);
+          const ta = area?.querySelector('.skill-edit-ta');
+          if (!ta) return;
+          btn.disabled = true;
+          btn.textContent = 'Saving…';
+          try {
+            const sr = await fetch('/api/repo/skill/update', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ repo: btn.dataset.repo, filename: btn.dataset.file, content: ta.value }),
+            });
+            const sd = await sr.json();
+            if (!sr.ok) throw new Error(sd.error || 'Save failed');
+            btn.textContent = '✓ Saved';
+            setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 1500);
+          } catch (e) {
+            alert('Save failed: ' + e.message);
+            btn.textContent = 'Save';
+            btn.disabled = false;
+          }
+        };
+      });
+      // Delete
+      listEl.querySelectorAll('[data-delete-file]').forEach(btn => {
+        btn.onclick = async () => {
+          if (!confirm(`Delete skill "${btn.dataset.deleteFile}"? This cannot be undone.`)) return;
+          try {
+            const dr = await fetch('/api/repo/skill/delete', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ repo: btn.dataset.deleteRepo, filename: btn.dataset.deleteFile }),
+            });
+            const dd = await dr.json();
+            if (!dr.ok) throw new Error(dd.error || 'Delete failed');
+            await loadSkills();
+          } catch (e) { alert('Delete failed: ' + e.message); }
+        };
+      });
+    } catch (e) {
+      listEl.innerHTML = `<div style="color:var(--status-blocked);font-size:12px">Error: ${safeHTML(e.message)}</div>`;
+    }
+  }
+
+  repoSel.addEventListener('change', loadSkills);
+  reloadBtn?.addEventListener('click', loadSkills);
+  loadSkills();
 }
 
 // ---- Usage / Agent Activity ----
