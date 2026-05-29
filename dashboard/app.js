@@ -1014,6 +1014,23 @@ const HARNESS_MODEL_IDS = {
   ],
 };
 
+// Reasoning-effort capability per harness (TKT-ZAF-0044).
+// `values: null` means the harness does NOT expose a configurable reasoning level — the control
+// is hidden in Agent Builder. claude-code is the only harness ZAF currently wires the value
+// through to (via /thinking budget injection, see server.js).
+const REASONING_CAPABILITY = {
+  'mock':        { values: null, forwarded: false, note: 'Simulator — no reasoning knob.' },
+  'claude':      { values: ['low','medium','high'], forwarded: true,
+                   note: 'Injected via /thinking budget at T+2s (high=10000, medium=3000, low=0).' },
+  'claude-code': { values: ['low','medium','high'], forwarded: true,
+                   note: 'Injected via /thinking budget at T+2s (high=10000, medium=3000, low=0).' },
+  'codex':       { values: null, forwarded: false,
+                   note: 'OpenAI Codex CLI does not expose a runtime reasoning knob; control hidden.' },
+  'gemini-cli':  { values: null, forwarded: false,
+                   note: 'Gemini CLI has no reasoning-effort flag; control hidden.' },
+  'antigravity': { values: null, forwarded: false, note: 'Antigravity has no reasoning-effort flag.' },
+};
+
 const ROLE_RECOMMENDATIONS = {
   thinker:  { modelId: 'claude-sonnet-4-6',          reasoning: 'high',   label: 'Sonnet 4.6 + high reasoning' },
   worker:   { modelId: 'claude-haiku-4-5-20251001',  reasoning: 'medium', label: 'Haiku 4.5 + medium reasoning' },
@@ -3365,13 +3382,11 @@ function renderControlAgentEditor() {
     : `<option value="" disabled>N/A</option>`;
   const modelDisabled = !HARNESS_MODEL_IDS[harness] ? 'disabled title="Model selection N/A for this harness"' : '';
 
-  // Reasoning note
-  let reasoningNote = '';
-  if (harness === 'claude-code' || harness === 'claude') {
-    reasoningNote = 'Injected via /thinking budget command at T+2s before seed (high=10000, medium=3000, low=0).';
-  } else if (harness === 'codex') {
-    reasoningNote = 'Codex does not support configurable reasoning level — dropdown has no effect.';
-  }
+  // Reasoning capability + note (TKT-ZAF-0044)
+  const reasoningCap = REASONING_CAPABILITY[harness] || { values: null, forwarded: false, note: '' };
+  const reasoningNote = reasoningCap.note || '';
+  const reasoningSupported = Array.isArray(reasoningCap.values);
+  const reasoningValues = reasoningSupported ? reasoningCap.values : [];
 
   // Recommended badge — only meaningful for Claude family (the only family whose model IDs the
   // recommendations reference); hide for non-Claude CLIs to avoid suggesting Sonnet 4.6 on codex/gemini.
@@ -3408,9 +3423,10 @@ function renderControlAgentEditor() {
             </div>
           </div>
 
-          <div class="zaf-field"><label>Reasoning Level</label>
+          <div class="zaf-field" id="agent-reasoning-field" style="${reasoningSupported ? '' : 'display:none'}">
+            <label>Reasoning Level</label>
             <select id="agent-reasoning">
-              ${['high','medium','low'].map(r => opt(r, a.reasoning || 'medium', r)).join('')}
+              ${reasoningValues.map(r => opt(r, a.reasoning || 'medium', r)).join('')}
             </select>
             ${reasoningNote ? `<div class="reasoning-note">${reasoningNote}</div>` : ''}
           </div>
@@ -3563,17 +3579,21 @@ ${p.bounds}`;
   };
   harnessSel?.addEventListener('change', updateModelDropdown);
 
-  // Update reasoning note when harness changes
+  // Update reasoning note + field visibility + accepted values when harness changes (TKT-ZAF-0044)
   const updateReasoningNote = () => {
-    const noteEl = container.querySelector('.reasoning-note');
-    if (!noteEl || !harnessSel) return;
+    if (!harnessSel) return;
     const h = harnessSel.value;
-    if (h === 'claude-code' || h === 'claude') {
-      noteEl.textContent = 'Injected via /thinking budget command at T+2s before seed (high=10000, medium=3000, low=0).';
-    } else if (h === 'codex') {
-      noteEl.textContent = 'Codex does not support configurable reasoning level — dropdown has no effect.';
-    } else {
-      noteEl.textContent = '';
+    const cap = REASONING_CAPABILITY[h] || { values: null, note: '' };
+    const fieldEl = container.querySelector('#agent-reasoning-field');
+    const noteEl  = container.querySelector('.reasoning-note');
+    const selEl   = container.querySelector('#agent-reasoning');
+    const supported = Array.isArray(cap.values);
+    if (fieldEl) fieldEl.style.display = supported ? '' : 'none';
+    if (noteEl)  noteEl.textContent = cap.note || '';
+    if (selEl && supported) {
+      const prev = selEl.value;
+      selEl.innerHTML = cap.values.map(v => `<option value="${v}" ${prev===v?'selected':''}>${v}</option>`).join('');
+      if (!cap.values.includes(prev)) selEl.value = cap.values.includes('medium') ? 'medium' : cap.values[0];
     }
   };
 
