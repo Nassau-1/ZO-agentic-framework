@@ -1,0 +1,4 @@
+## 2025-02-27 - Path Traversal Bypass via Partial Match
+**Vulnerability:** Path traversal in Node.js static file server (`dashboard/server.js`) caused by missing URI component decoding (`decodeURIComponent`) and reliance on a naive `.startsWith()` check that allowed partial directory name matches (e.g., `/app/dashboard-secrets` matches `.startsWith('/app/dashboard')`).
+**Learning:** `path.join` does not automatically decode URL encoded characters (like `%2e%2e/`), so relying on it alone for sanitization on raw URL paths is insufficient. Furthermore, `.startsWith()` without ensuring a trailing directory separator (`path.sep`) is vulnerable to sibling directory traversal.
+**Prevention:** Always decode URL paths before resolving them, use `path.resolve()` to get an absolute, normalized path, and enforce strict directory boundaries by appending `path.sep` to the target directory during `.startsWith()` validation.
