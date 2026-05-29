@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "cd dashboard && npm start",
-    "cli": "node cli/zaf.js"
+    "cli": "node cli/zaf.js",
+    "postinstall": "cd dashboard && npm install"
   },
   "dependencies": {
     "chokidar": "^3.6.0",
