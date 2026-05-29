@@ -443,6 +443,7 @@ ${ticketBody || '(ticket body could not be loaded)'}
 3. **Update ticket status if appropriate.** Move \`status:\` to \`IN_PROGRESS\` when you start, \`DONE\` when acceptance criteria are met, \`BLOCKED\` if blocked.
 4. **Stop on ambiguity.** If a credential, policy, or requirement is unclear, do NOT guess. Set status to \`BLOCKED\` and stop.
 5. **No secrets in output.**
+6. **Flag every out-of-scope finding as a new ticket (TKT-ZAF-0054).** If during this ticket you discover a bug, missing feature, broken assumption, or fix that is NOT in the current ticket's stated scope, you MUST: (a) append a \`DISCOVERED:\` entry to this ticket's Handoff Log naming the finding, and (b) create a new ticket for it via the standard ticket scaffolding (cli/zaf.js or the dashboard). Do NOT silently fix scope-creep work and do NOT leave findings undocumented. Each fix applied outside the original scope MUST have its own ticket — even if already applied.
 
 ${promptAddendum ? `## Per-ticket addendum (from operator)\n\n${promptAddendum}\n` : ''}## Start of work
 
